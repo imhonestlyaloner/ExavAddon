@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
-  "id": "anubis-addon-template",
+  "id": "exav-addon",
   "version": "${version}",
-  "name": "Anubis Addon Template",
-  "description": "Empty addon template for Anubis, build yours on top of it",
+  "name": "Exav Addon",
+  "description": "Exav addon for Anubis",
   "authors": [
-    "Your name"
+    "exav"
   ],
   "environment": "client",
   "entrypoints": {
     "anubis": [
-      "com.example.addon.ExampleAddon"
+      "com.exav.addon.ExavAddon"
     ]
   },
   "mixins": [
-    "anubis-addon-template.mixins.json"
+    "exav-addon.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.16.0",
