@@ -47,6 +47,8 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
     private final NumberSetting filterAbove = addSetting("filter-above", new NumberSetting("Use In Other Modules Above %", 35.0F, 5.0F, 90.0F).step(5.0F));
     private final NumberSetting persistMinutes = addSetting("persist-minutes", new NumberSetting("Full Trust After (min)", 3.0F, 0.5F, 15.0F).step(0.5F));
     private final BooleanSetting showAfkSpot = addSetting("show-afk-spot", new BooleanSetting("Show AFK Spot", true));
+    private final NumberSetting beamAbove = addSetting("beam-above", new NumberSetting("AFK Spot Above %", 50.0F, 0.0F, 95.0F).step(5.0F));
+    private final BooleanSetting labelEveryChunk = addSetting("label-every-chunk", new BooleanSetting("Label Every Chunk", false));
     private final BooleanSetting outlines = addSetting("outlines", new BooleanSetting("Chunk Outlines", true));
     private final BooleanSetting labels = addSetting("labels", new BooleanSetting("Labels", true));
     private final NumberSetting labelY = addSetting("label-y", new NumberSetting("Label Height", 74.0F, -60.0F, 320.0F).step(1.0F));
@@ -65,6 +67,10 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
     private final Long2LongOpenHashMap firstSeen = new Long2LongOpenHashMap();
     private final Long2LongOpenHashMap lastSeen = new Long2LongOpenHashMap();
     private volatile Long2ObjectOpenHashMap<Rating> ratings = new Long2ObjectOpenHashMap<>();
+    /** one AFK spot per group of nearby flags: the best-rated flag's spot, and how many flags it covers */
+    public record Spot(double x, double z, int percent, int flags, long bestChunk, String details) {
+    }
+    private volatile List<Spot> spots = List.of();
     private static volatile LongSet accepted;
     private ClientLevel lastLevel;
     private int ticks;
@@ -73,6 +79,7 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
     public SusConfidence() {
         super("Sus Chunk Confidence", "Rates every sus chunk by how likely it's real, finds the AFK spot, and fixes the simulation distance setting.", ExavAddon.CATEGORY);
         filterAbove.visibleWhen(filterOthers::get);
+        beamAbove.visibleWhen(showAfkSpot::get);
         labelY.visibleWhen(labels::get);
     }
 
@@ -210,12 +217,13 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
             double[] centre = centroid(field, cx, cz, radius);
             Rating r = new Rating(percent, centre[0], centre[1], String.join(" · ", why));
             next.put(key, r);
-            if (percent >= threshold) {
-                ok.add(key);
-                ok.add(r.afkChunk());
-            }
+            if (percent >= threshold) ok.add(key);
         }
         ratings = next;
+        spots = group(next, radius);
+        for (Spot sp : spots) {
+            if (sp.percent() >= threshold) ok.add(ChunkPos.asLong((int) Math.floor(sp.x()) >> 4, (int) Math.floor(sp.z()) >> 4));
+        }
         accepted = filterOthers.get() ? ok : null;
     }
 
@@ -275,6 +283,41 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
         return new double[]{x, z};
     }
 
+    /**
+     * Groups flags whose AFK spots are within one simulation distance of each other (Better Sus Chunk flags whole
+     * clusters of chunks around one spot), best-rated first, so each real spot gets one beam and one label.
+     */
+    private static List<Spot> group(Long2ObjectOpenHashMap<Rating> ratings, int radius) {
+        List<Long2ObjectOpenHashMap.Entry<Rating>> sorted = new ArrayList<>(ratings.long2ObjectEntrySet());
+        sorted.sort((a, b) -> Integer.compare(b.getValue().percent(), a.getValue().percent()));
+        double mergeSq = Math.pow(Math.max(24.0, radius * 16.0), 2);
+        List<Spot> out = new ArrayList<>();
+        int[] counts = new int[sorted.size()];
+        for (var e : sorted) {
+            Rating r = e.getValue();
+            int found = -1;
+            for (int i = 0; i < out.size(); i++) {
+                Spot sp = out.get(i);
+                double dx = sp.x() - r.afkX(), dz = sp.z() - r.afkZ();
+                if (dx * dx + dz * dz <= mergeSq) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found >= 0) {
+                counts[found]++;
+            } else {
+                counts[out.size()] = 1;
+                out.add(new Spot(r.afkX(), r.afkZ(), r.percent(), 1, e.getLongKey(), r.details()));
+            }
+        }
+        for (int i = 0; i < out.size(); i++) {
+            Spot sp = out.get(i);
+            out.set(i, new Spot(sp.x(), sp.z(), sp.percent(), counts[i], sp.bestChunk(), sp.details()));
+        }
+        return out;
+    }
+
     private static boolean nearAny(LongSet set, int cx, int cz, int r) {
         for (int dx = -r; dx <= r; dx++) {
             for (int dz = -r; dz <= r; dz++) {
@@ -305,7 +348,6 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
         FoglessLines lines = FoglessLines.forFrame(event.partialTick);
         float width = lineWidth.get();
         int hide = hideBelow.getInt();
-        LongOpenHashSet spotsDrawn = new LongOpenHashSet();
         for (var e : current.long2ObjectEntrySet()) {
             Rating r = e.getValue();
             if (r.percent() < hide) continue;
@@ -318,34 +360,52 @@ public final class SusConfidence extends ClientModule implements HudOverlayProvi
                 lines.line(x1, y, z1, x0, y, z1, argb, width);
                 lines.line(x0, y, z1, x0, y, z0, argb, width);
             }
-            // one beam per AFK spot (neighbouring flags usually share it)
-            if (showAfkSpot.get() && spotsDrawn.add(((long) Math.round(r.afkX()) << 32) ^ Math.round(r.afkZ()))) {
-                lines.line(r.afkX(), -64, r.afkZ(), r.afkX(), 320, r.afkZ(), argb, width * 1.5F);
+        }
+        // one beam per group of flags, and only for confident ones
+        if (showAfkSpot.get()) {
+            int min = Math.max(hide, beamAbove.getInt());
+            for (Spot sp : spots) {
+                if (sp.percent() < min) continue;
+                lines.line(sp.x(), -64, sp.z(), sp.x(), 320, sp.z(), colorFor(sp.percent()), width * 1.5F);
             }
         }
     }
 
     @Override
     public boolean isHudOverlayEnabled() {
-        return isEnabled() && labels.get() && !ratings.isEmpty();
+        return isEnabled() && labels.get() && (!ratings.isEmpty() || !spots.isEmpty());
     }
 
     @Override
     public void renderHudOverlay(ImDrawList dl, float screenW, float screenH) {
         Minecraft mc = Minecraft.getInstance();
         int hide = hideBelow.getInt();
+        String sim = simStatus;
         boolean first = true;
-        for (var e : ratings.long2ObjectEntrySet()) {
-            Rating r = e.getValue();
-            if (r.percent() < hide) continue;
-            long key = e.getLongKey();
-            Vec3 pos = new Vec3((ChunkPos.getX(key) << 4) + 8.0, labelY.get(), (ChunkPos.getZ(key) << 4) + 8.0);
+        if (labelEveryChunk.get()) {
+            for (var e : ratings.long2ObjectEntrySet()) {
+                Rating r = e.getValue();
+                if (r.percent() < hide) continue;
+                long key = e.getLongKey();
+                Vec3 pos = new Vec3((ChunkPos.getX(key) << 4) + 8.0, labelY.get(), (ChunkPos.getZ(key) << 4) + 8.0);
+                float[] screen = WorldLabel.project(mc, pos, screenW, screenH);
+                if (screen == null) continue;
+                String details = first && !sim.isEmpty() ? r.details() + " · " + sim : r.details();
+                first = false;
+                WorldLabel.drawText(dl, screen[0], screen[1], "Sus " + r.percent() + "%", details, 1.0F);
+            }
+            return;
+        }
+        // one label per spot, at the beam
+        for (Spot sp : spots) {
+            if (sp.percent() < hide) continue;
+            Vec3 pos = new Vec3(sp.x(), labelY.get(), sp.z());
             float[] screen = WorldLabel.project(mc, pos, screenW, screenH);
             if (screen == null) continue;
-            String details = r.details();
-            if (first && !simStatus.isEmpty()) details = details + " · " + simStatus;
+            String details = sp.details() + (sp.flags() > 1 ? " · " + sp.flags() + " flags" : "");
+            if (first && !sim.isEmpty()) details = details + " · " + sim;
             first = false;
-            WorldLabel.drawText(dl, screen[0], screen[1], "Sus " + r.percent() + "%", details, 1.0F);
+            WorldLabel.drawText(dl, screen[0], screen[1], "Sus " + sp.percent() + "%", details, 1.0F);
         }
     }
 
