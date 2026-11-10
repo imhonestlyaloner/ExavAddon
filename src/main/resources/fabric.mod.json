@@ -13,6 +13,7 @@
       "com.exav.addon.ExavAddon"
     ]
   },
+  "accessWidener": "exav-addon.accesswidener",
   "mixins": [
     "exav-addon.mixins.json"
   ],

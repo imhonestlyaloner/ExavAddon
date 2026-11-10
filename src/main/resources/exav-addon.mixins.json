@@ -9,6 +9,7 @@
     "ItemInHandRendererMixin",
     "LevelRendererEndSkyMixin",
     "LevelRendererSkyImagesMixin",
+    "LevelRendererSkyboxMixin",
     "MultiPlayerGameModeMixin",
     "SkyRendererTintMixin"
   ],

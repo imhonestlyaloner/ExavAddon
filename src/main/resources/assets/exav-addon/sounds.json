@@ -1,5 +1,8 @@
 {
   "party_horn": {
     "sounds": ["exav-addon:party_horn"]
+  },
+  "cat_video": {
+    "sounds": [{"name": "exav-addon:cat_video", "stream": true}]
   }
 }

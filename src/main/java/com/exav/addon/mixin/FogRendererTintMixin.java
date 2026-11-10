@@ -15,6 +15,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class FogRendererTintMixin {
     @Inject(method = "computeFogColor", at = @At("RETURN"))
     private void exav$tintFog(Camera camera, float partialTick, ClientLevel level, int renderDistance, float darken, CallbackInfoReturnable<Vector4f> cir) {
+        com.exav.addon.modules.VideoSkybox.tintFog(cir.getReturnValue());
         AlwaysEggs.tintFog(cir.getReturnValue());
     }
 }

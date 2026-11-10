@@ -62,7 +62,7 @@ public final class AlwaysEggs {
             lastChristmasT = -1;
             return;
         }
-        // presents: a jingle when one's thrown, a firework bang when it bursts
+        // presents: a little jingle when one's thrown (the burst is silent)
         float t = christmasTime();
         float since = t - ChristmasSky.FIRST_PRESENT;
         if (lastChristmasT >= 0 && since >= 0) {
@@ -70,11 +70,6 @@ public final class AlwaysEggs {
             var sounds = Minecraft.getInstance().getSoundManager();
             if (Math.floor(since / ChristmasSky.PRESENT_EVERY) != Math.floor(prevSince / ChristmasSky.PRESENT_EVERY) || (prevSince < 0)) {
                 sounds.play(SimpleSoundInstance.forUI(SoundEvents.NOTE_BLOCK_CHIME.value(), 1.2F, 0.5F));
-            }
-            float burst = since - ChristmasSky.BURST_AT, prevBurst = prevSince - ChristmasSky.BURST_AT;
-            if (burst >= 0 && (prevBurst < 0 || Math.floor(burst / ChristmasSky.PRESENT_EVERY) != Math.floor(prevBurst / ChristmasSky.PRESENT_EVERY))) {
-                sounds.play(SimpleSoundInstance.forUI(SoundEvents.FIREWORK_ROCKET_LARGE_BLAST, 1.0F, 0.7F));
-                sounds.play(SimpleSoundInstance.forUI(SoundEvents.FIREWORK_ROCKET_TWINKLE, 1.0F, 0.6F));
             }
         }
         lastChristmasT = t;
