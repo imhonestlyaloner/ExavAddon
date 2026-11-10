@@ -6,7 +6,10 @@ import imgui.ImColor;
 import imgui.ImDrawList;
 import java.util.List;
 import java.util.Random;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.network.chat.Component;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
@@ -35,8 +38,8 @@ public final class CakeShow {
     public static final Identifier IMAGE = Identifier.fromNamespaceAndPath("exav-addon", "textures/misc/birthday_hat.png");
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
 
-    public record Config(String text, float opacity, float size, int density, float flutter, String palette,
-                         boolean showImage, float imageSize, float imageOpacity, boolean splat) {
+    public record Config(String text, float textSize, float textOpacity, float opacity, float size, int density, float flutter,
+                         String palette, boolean showImage, float imageSize, float imageOpacity, boolean splat) {
     }
 
     private static final int[][] PALETTES = {
@@ -47,12 +50,11 @@ public final class CakeShow {
     };
     public static final String[] PALETTE_NAMES = {"Rainbow", "Pastel", "Gold", "Christmas"};
 
-    // confetti layout, rebuilt when the settings change
+    // confetti, rebuilt when the settings change
     private String layoutKey = "";
     private int count;
-    private float[] target, control, start, axis, phase, delay, blow;
+    private float[] start, velocity, axis, phase, delay, blow, drift;
     private int[] colors;
-    private float pixel;
 
     // ------------------------------------------------------------------ the hand / cake pose
 
@@ -104,6 +106,7 @@ public final class CakeShow {
         Vector3f cakeTop = HolidayAnimation.pointOf(SHOW, SHOW_ROT, scale, skin, 0, HolidayModels.CAKE_TOP_Y, 0);
         Vector3f cakeMid = HolidayAnimation.pointOf(SHOW, SHOW_ROT, scale, skin, 0, 4.0F, 0);
         layout(cfg, cakeTop);
+        text(pose, collector, t, cfg);
         RenderType translucent = RenderTypes.entityTranslucent(WHITE);
         int bright = 0xF000F0;
 
@@ -244,46 +247,94 @@ public final class CakeShow {
         }
     }
 
-    // ------------------------------------------------------------------ confetti
+    // ------------------------------------------------------------------ the message, in plain Minecraft text
+
+    private static void text(PoseStack pose, SubmitNodeCollector collector, float t, Config cfg) {
+        if (t < POP || t > BOOM + 1.0F || cfg.text().isBlank()) return;
+        Font font = Minecraft.getInstance().font;
+        List<String> lines = wrap(cfg.text(), 22);
+        int widest = 1;
+        for (String l : lines) widest = Math.max(widest, font.width(l));
+        // fit the widest line into about 1.1 blocks, then apply the size setting
+        float px = Math.min(0.011F, 1.1F / widest) * cfg.textSize();
+        float pop = backOut(Math.min(1.0F, (t - POP - 0.1F) / 0.4F));
+        if (pop <= 0.001F) return;
+        float alpha = cfg.textOpacity();
+        Vector3f c = new Vector3f(TEXT_CENTRE).add(0, 0.01F * (float) Math.sin(t * 2.0F + 1.0F), 0);
+        float tilt = 0;
+        if (t > BOOM) { // blown up and away
+            float b = t - BOOM;
+            c.add(-0.15F * b, 0.8F * b - 0.5F * b * b, -0.15F * b);
+            tilt = b * 140.0F;
+            alpha *= 1.0F - HolidayAnimation.smooth(b / 1.0F);
+        }
+        int a = (int) (Math.max(0, Math.min(1, alpha)) * 255);
+        if (a < 5) return;
+        float s = px * pop;
+        pose.pushPose();
+        pose.translate(c.x, c.y, c.z);
+        pose.mulPose(new Quaternionf().rotationZ((float) Math.toRadians(tilt)));
+        pose.scale(s, -s, s); // text draws y-down
+        float lineH = 10;
+        float top = -(lines.size() * lineH - 1) / 2.0F;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            collector.submitText(pose, -font.width(line) / 2.0F, top + i * lineH, Component.literal(line).getVisualOrderText(),
+                    true, Font.DisplayMode.NORMAL, 0xF000F0, (a << 24) | 0xFFFFFF, 0, 0);
+        }
+        pose.popPose();
+    }
+
+    /** splits on spaces into lines of at most maxChars, keeping the text's own capitals */
+    private static List<String> wrap(String text, int maxChars) {
+        List<String> lines = new java.util.ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String word : text.trim().split("\\s+")) {
+            if (line.length() > 0 && line.length() + 1 + word.length() > maxChars) {
+                lines.add(line.toString());
+                line.setLength(0);
+            }
+            if (line.length() > 0) line.append(' ');
+            line.append(word);
+        }
+        if (line.length() > 0) lines.add(line.toString());
+        return lines;
+    }
+
+    // ------------------------------------------------------------------ confetti: bursts out of the cake and flutters down
 
     private void layout(Config cfg, Vector3f cakeTop) {
-        String key = cfg.text() + "|" + cfg.density() + "|" + cfg.palette() + "|" + cfg.size();
+        String key = cfg.density() + "|" + cfg.palette() + "|" + cakeTop.x + "," + cakeTop.y;
         if (key.equals(layoutKey)) return;
         layoutKey = key;
-        List<String> lines = PixelFont.wrap(cfg.text().isBlank() ? "HAPPY BIRTHDAY" : cfg.text(), 14);
-        List<float[]> px = PixelFont.pixels(lines);
-        int cols = PixelFont.maxLineLength(lines) * 6;
-        pixel = Math.min(0.016F, 1.2F / Math.max(1, cols));
-        int density = Math.max(1, cfg.density());
-        count = px.size() * density;
-        target = new float[count * 3];
-        control = new float[count * 3];
+        count = 110 * Math.max(1, cfg.density());
         start = new float[count * 3];
+        velocity = new float[count * 3];
         axis = new float[count * 3];
         phase = new float[count];
         delay = new float[count];
         blow = new float[count * 3];
+        drift = new float[count];
         colors = new int[count];
         int[] palette = PALETTES[Math.max(0, java.util.Arrays.asList(PALETTE_NAMES).indexOf(cfg.palette()))];
         Random r = new Random(42);
         for (int i = 0; i < count; i++) {
-            float[] pxl = px.get(i / density);
-            float jx = density > 1 ? (r.nextFloat() - 0.5F) * 0.8F : 0, jy = density > 1 ? (r.nextFloat() - 0.5F) * 0.8F : 0;
-            target[i * 3] = TEXT_CENTRE.x + (pxl[0] + jx) * pixel;
-            target[i * 3 + 1] = TEXT_CENTRE.y + (pxl[1] + jy) * pixel;
-            target[i * 3 + 2] = TEXT_CENTRE.z + (r.nextFloat() - 0.5F) * 0.01F;
             start[i * 3] = cakeTop.x + (r.nextFloat() - 0.5F) * 0.04F;
             start[i * 3 + 1] = cakeTop.y + 0.03F;
             start[i * 3 + 2] = cakeTop.z + (r.nextFloat() - 0.5F) * 0.04F;
-            control[i * 3] = start[i * 3] + (r.nextFloat() - 0.5F) * 0.7F;
-            control[i * 3 + 1] = Math.max(start[i * 3 + 1], target[i * 3 + 1]) + 0.25F + r.nextFloat() * 0.35F;
-            control[i * 3 + 2] = start[i * 3 + 2] + (r.nextFloat() - 0.5F) * 0.25F;
+            // a fountain: mostly up, spread out sideways
+            double a = r.nextDouble() * Math.PI * 2;
+            float out = 0.25F + r.nextFloat() * 0.75F;
+            velocity[i * 3] = (float) Math.cos(a) * out * 1.1F;
+            velocity[i * 3 + 1] = 1.6F + r.nextFloat() * 1.4F;
+            velocity[i * 3 + 2] = (float) Math.sin(a) * out * 0.6F;
             Vector3f ax = new Vector3f(r.nextFloat() - 0.5F, r.nextFloat() - 0.5F, r.nextFloat() - 0.5F).normalize();
             axis[i * 3] = ax.x;
             axis[i * 3 + 1] = ax.y;
             axis[i * 3 + 2] = ax.z;
             phase[i] = r.nextFloat() * 6.283F;
-            delay[i] = r.nextFloat() * 0.35F;
+            delay[i] = r.nextFloat() * 0.25F;
+            drift[i] = 0.10F + r.nextFloat() * 0.12F;
             Vector3f bv = new Vector3f(r.nextFloat() - 0.5F, r.nextFloat() * 0.6F, r.nextFloat() - 0.5F).normalize().mul(0.6F + r.nextFloat() * 0.9F);
             blow[i * 3] = bv.x;
             blow[i * 3 + 1] = bv.y;
@@ -292,8 +343,19 @@ public final class CakeShow {
         }
     }
 
+    /** where confetti piece i is at time `since` after it launched (air slows it fast, then it drifts down) */
+    private void piece(int i, float since, float flutter, Vector3f out) {
+        float k = 2.6F; // air drag
+        float travel = (1 - (float) Math.exp(-k * since)) / k;
+        out.set(start[i * 3] + velocity[i * 3] * travel,
+                start[i * 3 + 1] + velocity[i * 3 + 1] * travel - drift[i] * since,
+                start[i * 3 + 2] + velocity[i * 3 + 2] * travel);
+        float sway = flutter * 0.03F * Math.min(1.0F, since);
+        out.add(sway * (float) Math.sin(since * 3.1F + phase[i]), 0, sway * 0.5F * (float) Math.cos(since * 2.3F + phase[i]));
+    }
+
     private void confetti(PoseStack.Pose p, VertexConsumer out, float t, Config cfg, Vector3f boomAt, float alpha, int light) {
-        float w = pixel * 0.95F * cfg.size() / 2, h = pixel * 0.6F * cfg.size() / 2;
+        float w = 0.011F * cfg.size() / 2, h = 0.007F * cfg.size() / 2;
         int a = (int) (Math.max(0, Math.min(1, alpha)) * 255);
         Vector3f pos = new Vector3f(), n = new Vector3f();
         Vector3f c0 = new Vector3f(), c1 = new Vector3f(), c2 = new Vector3f(), c3 = new Vector3f();
@@ -303,21 +365,13 @@ public final class CakeShow {
             if (since < 0) continue;
             float spin;
             if (t < BOOM) {
-                float u = Math.min(1.0F, since / FLIGHT);
-                float e = 1 - (1 - u) * (1 - u); // ease out
-                // curve from the cake, up through the control point, into its place in the letters
-                float a0 = (1 - e) * (1 - e), a1 = 2 * e * (1 - e), a2 = e * e;
-                pos.set(start[i * 3] * a0 + control[i * 3] * a1 + target[i * 3] * a2,
-                        start[i * 3 + 1] * a0 + control[i * 3 + 1] * a1 + target[i * 3 + 1] * a2,
-                        start[i * 3 + 2] * a0 + control[i * 3 + 2] * a1 + target[i * 3 + 2] * a2);
-                float fl = cfg.flutter() * pixel * 0.25F * e;
-                pos.add(fl * (float) Math.sin(t * 3.1F + phase[i]), fl * (float) Math.sin(t * 2.3F + phase[i] * 1.7F), 0);
-                spin = phase[i] + (1 - e) * 14.0F + cfg.flutter() * 0.6F * (float) Math.sin(t * 2.0F + phase[i]);
-            } else {
+                piece(i, since, cfg.flutter(), pos);
+                spin = phase[i] + since * (3.0F + 3.0F * cfg.flutter());
+            } else { // the explosion throws everything outward
+                piece(i, BOOM - POP - delay[i], cfg.flutter(), pos);
                 float b = t - BOOM;
-                pos.set(target[i * 3], target[i * 3 + 1], target[i * 3 + 2])
-                        .add(blow[i * 3] * b, blow[i * 3 + 1] * b - 1.4F * b * b, blow[i * 3 + 2] * b);
-                spin = phase[i] + b * 12.0F;
+                pos.add(blow[i * 3] * b, blow[i * 3 + 1] * b - 1.4F * b * b, blow[i * 3 + 2] * b);
+                spin = phase[i] + b * 14.0F;
             }
             q.setAngleAxis(spin, axis[i * 3], axis[i * 3 + 1], axis[i * 3 + 2]);
             q.transform(c0.set(-w, -h, 0)).add(pos);

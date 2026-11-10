@@ -57,7 +57,9 @@ public final class HolidayKnife extends ClientModule implements HudOverlayProvid
     private final BooleanSetting hideHand = addSetting("hide-hand", new BooleanSetting("Hide Hand Model", false));
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Sound Volume", 100.0F, 0.0F, 100.0F).step(5.0F));
     // birthday cake
-    private final StringSetting cakeText = addSetting("cake-text", new StringSetting("Confetti Text", "Happy Birthday Valk"));
+    private final StringSetting cakeText = addSetting("cake-text", new StringSetting("Birthday Text", "Happy Birthday Valk"));
+    private final NumberSetting textSize = addSetting("text-size", new NumberSetting("Text Size", 1.0F, 0.4F, 2.0F).step(0.05F));
+    private final NumberSetting textOpacity = addSetting("text-opacity", new NumberSetting("Text Opacity", 100.0F, 10.0F, 100.0F).step(5.0F));
     private final NumberSetting confettiOpacity = addSetting("confetti-opacity", new NumberSetting("Confetti Opacity", 90.0F, 10.0F, 100.0F).step(5.0F));
     private final NumberSetting confettiSize = addSetting("confetti-size", new NumberSetting("Confetti Size", 1.0F, 0.4F, 2.0F).step(0.05F));
     private final NumberSetting confettiAmount = addSetting("confetti-amount", new NumberSetting("Confetti Amount", 2.0F, 1.0F, 4.0F).step(1.0F));
@@ -85,7 +87,7 @@ public final class HolidayKnife extends ClientModule implements HudOverlayProvid
     public HolidayKnife() {
         super("Holiday Knife", "Candy cane, hot cocoa, gingerbread man or birthday cake skins for your sword, each with its own inspect animation (F by default).", ExavAddon.CATEGORY);
         caneColors.visibleWhen(() -> skin.is(Skin.CANDY_CANE.label));
-        for (var s : new net.anubis.client.module.setting.Setting[]{cakeText, confettiOpacity, confettiSize, confettiAmount, confettiFlutter,
+        for (var s : new net.anubis.client.module.setting.Setting[]{cakeText, textSize, textOpacity, confettiOpacity, confettiSize, confettiAmount, confettiFlutter,
                 confettiColors, showImage, imageSize, imageOpacity, faceSplat}) {
             s.visibleWhen(() -> skin.is(Skin.BIRTHDAY_CAKE.label));
         }
@@ -283,7 +285,7 @@ public final class HolidayKnife extends ClientModule implements HudOverlayProvid
     }
 
     private CakeShow.Config cakeConfig() {
-        return new CakeShow.Config(cakeText.get(), confettiOpacity.get() / 100.0F, confettiSize.get(), confettiAmount.getInt(),
+        return new CakeShow.Config(cakeText.get(), textSize.get(), textOpacity.get() / 100.0F, confettiOpacity.get() / 100.0F, confettiSize.get(), confettiAmount.getInt(),
                 confettiFlutter.get(), confettiColors.get(), showImage.get(), imageSize.get(), imageOpacity.get() / 100.0F, faceSplat.get());
     }
 
