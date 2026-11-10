@@ -120,7 +120,7 @@ public final class BaseEvidence {
                 + 0.04 * Math.min(c.hiddenLight(), 75);
         double strong = 3.0 * Math.min(v[RARE_STORAGE], 4)
                 + 2.5 * Math.min(v[PORTAL], 1)
-                + 1.2 * Math.min(c.tunnels(), 5)
+                + 1.3 * Math.min(c.tunnels(), 5)
                 + 1.5 * Math.min(c.branchMines(), 4)
                 + 0.4 * Math.min(liveEdits, 12);
         double prior = c.flaggedByBoth() ? 0.18 : 0.10;
@@ -133,7 +133,7 @@ public final class BaseEvidence {
         add(parts, k[STORAGE], "storage");
         add(parts, k[UTILITY], "station");
         add(parts, k[SIGN], "sign");
-        add(parts, c.tunnels(), "3x3 tunnel");
+        add(parts, c.tunnels(), "dug tunnel");
         add(parts, c.branchMines(), "branch mine");
         add(parts, k[PORTAL] > 0 ? 1 : 0, "portal");
         add(parts, k[LIGHT], "light block");

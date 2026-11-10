@@ -34,7 +34,7 @@ public final class Merger {
     public static Output merge(Collection<ChunkJob.Result> results, int minCaveSize) {
         List<Tunnel> tunnels = mergeTunnels(results);
         List<AABB> boxes = new ArrayList<>(tunnels.size());
-        for (Tunnel t : tunnels) boxes.add(t.box());
+        for (Tunnel t : tunnels) boxes.addAll(t.boxes());
         return new Output(tunnels, boxes, mergeCaves(results, tunnels, minCaveSize));
     }
 
@@ -42,7 +42,7 @@ public final class Merger {
         Map<List<Integer>, List<Tunnel>> lines = new HashMap<>();
         for (ChunkJob.Result r : results) {
             for (Tunnel t : r.tunnels()) {
-                lines.computeIfAbsent(List.of(t.axis(), t.y(), t.lateral(), t.width(), t.height()), k -> new ArrayList<>()).add(t);
+                lines.computeIfAbsent(List.of(t.axis(), t.y() - t.slope() * t.start(), t.lateral(), t.width(), t.height(), t.slope()), k -> new ArrayList<>()).add(t);
             }
         }
         List<Tunnel> merged = new ArrayList<>();
@@ -51,7 +51,7 @@ public final class Merger {
             Tunnel cur = null;
             for (Tunnel t : line) {
                 if (cur != null && t.start() <= cur.end() + 1) {
-                    cur = new Tunnel(cur.axis(), cur.y(), cur.lateral(), cur.start(), Math.max(cur.end(), t.end()), cur.width(), cur.height());
+                    cur = new Tunnel(cur.axis(), cur.y(), cur.lateral(), cur.start(), Math.max(cur.end(), t.end()), cur.width(), cur.height(), cur.slope());
                 } else {
                     if (cur != null) merged.add(cur);
                     cur = t;
@@ -71,13 +71,16 @@ public final class Merger {
         }
         if (all.isEmpty()) return List.of();
 
+        // air you dug yourself isn't cave
+        all.removeIf(p -> com.exav.addon.util.MyEdits.isMine(p));
         // tunnels are drawn on their own, don't count them as cave
         for (Tunnel t : tunnels) {
-            AABB b = t.box();
-            for (int x = (int) b.minX; x < (int) b.maxX; x++) {
-                for (int y = (int) b.minY; y < (int) b.maxY; y++) {
-                    for (int z = (int) b.minZ; z < (int) b.maxZ; z++) {
-                        all.remove(BlockPos.asLong(x, y, z));
+            for (AABB b : t.boxes()) {
+                for (int x = (int) b.minX; x < (int) b.maxX; x++) {
+                    for (int y = (int) b.minY; y < (int) b.maxY; y++) {
+                        for (int z = (int) b.minZ; z < (int) b.maxZ; z++) {
+                            all.remove(BlockPos.asLong(x, y, z));
+                        }
                     }
                 }
             }

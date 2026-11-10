@@ -9,7 +9,8 @@ import com.exav.addon.scan.Evidence;
 import com.exav.addon.scan.LightScanner;
 import com.exav.addon.scan.Tunnel;
 import com.exav.addon.scan.LiveEdits;
-import com.exav.addon.scan.TunnelScanner;
+import com.exav.addon.scan.TunnelSet;
+import com.exav.addon.util.MyEdits;
 import com.exav.addon.util.SusChunks;
 import imgui.ImDrawList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -40,15 +41,11 @@ import net.minecraft.world.phys.Vec3;
  * in the caves around it, and from blocks being broken/placed near it while you watch.
  */
 public final class BaseFinder extends ClientModule implements HudOverlayProvider {
-    private static final int BRANCH_MIN_LENGTH = 12;
     private static final int CAVE_MIN_SIZE = 30;
-    /** block changes this close to you are probably yours */
-    private static final double OWN_EDIT_RANGE = 7.0;
 
     private final ModeSetting source = addSetting("source", new ModeSetting("Source", SusChunks.BOTH, SusChunks.SOURCES));
     private final BooleanSetting undergroundOnly = addSetting("underground-only", new BooleanSetting("Underground Only", true));
-    private final BooleanSetting countTunnels = addSetting("count-tunnels", new BooleanSetting("Count 3x3 Tunnels", true));
-    private final BooleanSetting countBranchMines = addSetting("count-branch-mines", new BooleanSetting("Count Branch Mines", true));
+    private final BooleanSetting countTunnels = addSetting("count-tunnels", new BooleanSetting("Count Player Tunnels", true));
     private final BooleanSetting scanCaves = addSetting("scan-caves", new BooleanSetting("Scan Nearby Caves", true));
     private final NumberSetting caveRadius = addSetting("cave-radius", new NumberSetting("Cave Radius (chunks)", 1.0F, 0.0F, 3.0F).step(1.0F));
     private final BooleanSetting detectLight = addSetting("detect-light", new BooleanSetting("Detect Hidden Light", true));
@@ -82,8 +79,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         final long key;
         final int cx, cz;
         final BaseEvidence evidence;
-        final TunnelScanner tunnels;
-        final TunnelScanner branches;
+        final TunnelSet tunnels;
         final CaveScanner caves;
         final boolean surfacesOn;
         final boolean lightOn;
@@ -100,8 +96,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             this.surfacesOn = scanCaves.get();
             this.lightOn = detectLight.get();
             this.evidence = new BaseEvidence(reader, chunk, cx, cz, undergroundOnly.get());
-            this.tunnels = countTunnels.get() ? new TunnelScanner(reader, cx, cz, 8) : null;
-            this.branches = countBranchMines.get() ? new TunnelScanner(reader, cx, cz, BRANCH_MIN_LENGTH, 1, 2) : null;
+            this.tunnels = countTunnels.get() ? new TunnelSet(reader, cx, cz, true, 8) : null;
             this.caves = surfacesOn || lightOn ? new CaveScanner(reader, cx, cz, radius, CAVE_MIN_SIZE) : null;
         }
 
@@ -110,7 +105,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
                 boolean done = switch (phase) {
                     case 0 -> evidence.step(deadline);
                     case 1 -> tunnels == null || tunnels.step(deadline);
-                    case 2 -> branches == null || branches.step(deadline);
+                    case 2 -> true;
                     case 3 -> caves == null || caves.step(deadline);
                     case 4 -> {
                         if (!surfacesOn) yield true;
@@ -135,8 +130,16 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             int[] ignored = new int[1];
             int[] chunkCounts = evidence.evidence().count(zones, ignored);
             int[] caveCounts = surfaces == null ? new int[BaseEvidence.KINDS] : surfaces.evidence().count(zones, ignored);
-            int tunnelCount = countTunnels(tunnels, zones, ignored);
-            int branchCount = countTunnels(branches, zones, ignored);
+            int tunnelCount = 0, branchCount = 0;
+            if (tunnels != null) {
+                // stronghold corridors and trial chamber halls are exactly 3 wide, so tunnels inside structures don't count
+                for (Tunnel t : tunnels.results()) {
+                    AABB b = t.boxes().get(0);
+                    if (zones.contains((int) b.getCenter().x, (int) b.minY, (int) b.getCenter().z)) ignored[0]++;
+                    else if (t.width() == 1 && t.slope() == 0) branchCount++;
+                    else tunnelCount++;
+                }
+            }
             int hiddenLight = 0;
             if (light != null) {
                 for (int i = 0; i < light.results().size(); i++) {
@@ -152,18 +155,6 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         }
     }
 
-    /** stronghold corridors and trial chamber halls are exactly 3 wide, so tunnels inside structures don't count */
-    private static int countTunnels(TunnelScanner scanner, Evidence.Zones zones, int[] ignored) {
-        if (scanner == null) return 0;
-        int n = 0;
-        for (Tunnel t : scanner.results()) {
-            AABB b = t.box();
-            if (zones.contains((int) b.getCenter().x, (int) b.minY, (int) b.getCenter().z)) ignored[0]++;
-            else n++;
-        }
-        return n;
-    }
-
     public BaseFinder() {
         super("Base Finder", "Shows the % chance there's a base under each flagged sus chunk, from what's under it, the caves and light around it and live block changes.", ExavAddon.CATEGORY);
         caveRadius.visibleWhen(() -> scanCaves.get() || detectLight.get());
@@ -172,7 +163,6 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         source.onChange(rescan);
         undergroundOnly.onChange(rescan);
         countTunnels.onChange(rescan);
-        countBranchMines.onChange(rescan);
         scanCaves.onChange(rescan);
         caveRadius.onChange(rescan);
         detectLight.onChange(rescan);
@@ -251,7 +241,8 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         if (mc.player == null) return;
         BlockPos pos = event.pos;
         if (pos.getY() >= reader.surface(pos.getX(), pos.getZ()) - 3) return; // underground only
-        if (mc.player.getEyePosition().distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) < OWN_EDIT_RANGE * OWN_EDIT_RANGE) return;
+        // your own breaking / placing never counts
+        if (MyEdits.record(pos, event.oldState.isAir(), event.newState.isAir(), event.oldState.getBlock() != event.newState.getBlock())) return;
         if (!LiveEdits.looksPlayerMade(event.oldState, event.newState, pos)) return;
 
         long now = System.currentTimeMillis();

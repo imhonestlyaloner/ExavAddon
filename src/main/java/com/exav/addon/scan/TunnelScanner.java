@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Finds straight tunnels of an exact size (3x3 by default, 1x2 for branch mines) that pass through one chunk. Runs a bit at a time via {@link #step(long)}.
+ * Finds straight tunnels of one exact size (and slope, for staircases) that pass through one chunk. Runs a bit at a time via {@link #step(long)}.
  *
  * Every candidate 3x3 cross-section ("slice") is checked along X and Z. A slice is:
  *  - NONE when any of its interior blocks isn't open (or it's above the surface)
@@ -28,6 +28,8 @@ public final class TunnelScanner {
     private final int minLength;
     private final int width;
     private final int height;
+    private final int slope;
+    private final int yMin;
     private final int yMax;
     private int y;
     private final List<Tunnel> found = new ArrayList<>();
@@ -40,24 +42,35 @@ public final class TunnelScanner {
     private boolean inRun;
 
     public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength) {
-        this(reader, chunkX, chunkZ, minLength, 3, 3);
+        this(reader, chunkX, chunkZ, minLength, 3, 3, 0);
     }
 
     public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength, int width, int height) {
+        this(reader, chunkX, chunkZ, minLength, width, height, 0);
+    }
+
+    /**
+     * For staircases (slope != 0), each scan line's floor moves by slope per block, and y means
+     * the floor height at the chunk's first block along the axis.
+     */
+    public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength, int width, int height, int slope) {
         this.reader = reader;
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
         this.minLength = minLength;
         this.width = width;
         this.height = height;
-        this.y = reader.minY() + 1;
+        this.slope = slope;
         int top = reader.minY();
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 top = Math.max(top, reader.surface((chunkX << 4) + x, (chunkZ << 4) + z));
             }
         }
-        this.yMax = top - height; // the ceiling (y + height) has to be at or under the surface
+        // the ceiling (y + height) has to be at or under the surface; staircase lines start up to 15 off
+        this.yMin = reader.minY() + 1 - 15 * Math.abs(slope);
+        this.yMax = top - height + 15 * Math.abs(slope);
+        this.y = yMin;
     }
 
     /** @return true once the whole chunk has been scanned */
@@ -112,14 +125,16 @@ public final class TunnelScanner {
 
     private void finish(int axis, int y, int l, int c0, int c1) {
         if (inRun && good >= minLength && lastGood >= c0 && runStart <= c1) {
-            found.add(new Tunnel(axis, y, l, runStart, lastGood, width, height));
+            found.add(new Tunnel(axis, y + slope * (runStart - c0), l, runStart, lastGood, width, height, slope));
         }
         inRun = false;
         good = 0;
         gap = 0;
     }
 
-    private byte slice(int axis, int t, int y, int l) {
+    private byte slice(int axis, int t, int lineY, int l) {
+        int c0 = axis == 0 ? chunkX << 4 : chunkZ << 4;
+        int y = lineY + slope * (t - c0);
         // centre first, it rejects almost everything underground
         if (!at(axis, t, y + height / 2, l + width / 2, true)) return NONE;
         for (int dy = 0; dy < height; dy++) {

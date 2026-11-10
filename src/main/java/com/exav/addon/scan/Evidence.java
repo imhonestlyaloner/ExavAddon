@@ -4,11 +4,12 @@ import it.unimi.dsi.fastutil.bytes.ByteArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import com.exav.addon.util.MyEdits;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Collects player-looking blocks with their positions, plus structure markers (dungeon spawners,
+ * Collects player-looking blocks (except ones you placed yourself) with their positions, plus structure markers (dungeon spawners,
  * stronghold bricks, ancient city deepslate, trial spawners...). Positions are kept so that, once everything
  * has been scanned, anything sitting inside a structure can be thrown away.
  */
@@ -34,7 +35,7 @@ public final class Evidence {
             return;
         }
         byte k = BaseEvidence.kind(block);
-        if (k == BaseEvidence.NONE || stored[k]++ >= CAP) return;
+        if (k == BaseEvidence.NONE || MyEdits.isMine(x, y, z) || stored[k]++ >= CAP) return;
         positions.add(BlockPos.asLong(x, y, z));
         kinds.add(k);
     }

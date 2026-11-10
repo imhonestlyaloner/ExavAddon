@@ -45,7 +45,8 @@ public final class SusChunkPlus extends ClientModule {
     private final ModeSetting source = addSetting("source", new ModeSetting("Source", SusChunks.BOTH, SusChunks.SOURCES));
 
     private final BooleanSetting tunnels = addSetting("tunnels", new BooleanSetting("Tunnels", true));
-    private final NumberSetting minTunnelLength = addSetting("min-tunnel-length", new NumberSetting("Min Tunnel Length", 8.0F, 4.0F, 32.0F).step(1.0F));
+    private final ModeSetting tunnelShapes = addSetting("tunnel-shapes", new ModeSetting("Tunnel Shapes", "All", "All", "3x3 Only"));
+    private final NumberSetting minTunnelLength = addSetting("min-tunnel-length", new NumberSetting("Min Tunnel Length (3x3+)", 8.0F, 4.0F, 32.0F).step(1.0F));
     private final ColorSetting tunnelColor = addSetting("tunnel-color", new ColorSetting("Tunnel Color", 0xFFFF8C00));
 
     private final BooleanSetting caves = addSetting("caves", new BooleanSetting("Caves", true));
@@ -73,8 +74,9 @@ public final class SusChunkPlus extends ClientModule {
     private volatile Merger.Output output = Merger.Output.EMPTY;
 
     public SusChunkPlus() {
-        super("Exav's Relog Alternative", "When a sus chunk gets flagged, also labels 3x3 tunnels through it and caves around it.", ExavAddon.CATEGORY);
+        super("Exav's Relog Alternative", "When a sus chunk gets flagged, also labels player-dug tunnels through it and caves around it. Ignores your own digging.", ExavAddon.CATEGORY);
         minTunnelLength.visibleWhen(tunnels::get);
+        tunnelShapes.visibleWhen(tunnels::get);
         tunnelColor.visibleWhen(tunnels::get);
         caveRadius.visibleWhen(caves::get);
         minCaveSize.visibleWhen(caves::get);
@@ -83,6 +85,7 @@ public final class SusChunkPlus extends ClientModule {
         Runnable rescan = () -> settingsChanged = true;
         source.onChange(rescan);
         tunnels.onChange(rescan);
+        tunnelShapes.onChange(rescan);
         minTunnelLength.onChange(rescan);
         caves.onChange(rescan);
         caveRadius.onChange(rescan);
@@ -158,7 +161,7 @@ public final class SusChunkPlus extends ClientModule {
                 int cz = ChunkPos.getZ(key);
                 if (!reader.isLoaded(cx, cz)) continue;
                 current = new ChunkJob(reader, key, cx, cz,
-                        tunnels.get(), minTunnelLength.getInt(),
+                        tunnels.get(), tunnelShapes.is("All"), minTunnelLength.getInt(),
                         caves.get(), caveRadius.getInt(), minCaveSize.getInt());
             }
             if (current.step(deadline)) {
