@@ -39,7 +39,7 @@ public final class CakeShow {
     public static final Identifier IMAGE = Identifier.fromNamespaceAndPath("exav-addon", "textures/misc/birthday_hat.png");
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
 
-    public record Config(String text, float textSize, float textOpacity, float opacity, float size, int density, float flutter, String palette,
+    public record Config(String text, float textSize, float textOpacity, float textX, float textY, float textZ, float opacity, float size, int density, float flutter, String palette,
                          boolean showImage, float imageSize, float imageOpacity, float imageX, float imageY, float imageZ, boolean splat, boolean sparklers, float sparkAmount) {
     }
 
@@ -265,7 +265,8 @@ public final class CakeShow {
         float pop = backOut(Math.min(1.0F, (t - POP - 0.1F) / 0.4F));
         if (pop <= 0.001F) return;
         float alpha = cfg.textOpacity();
-        Vector3f c = new Vector3f(TEXT_CENTRE).add(0, 0.01F * (float) Math.sin(t * 2.0F + 1.0F), 0);
+        // the offsets move it right/up/toward you from its default spot above the sparklers
+        Vector3f c = new Vector3f(TEXT_CENTRE).add(cfg.textX(), cfg.textY() + 0.01F * (float) Math.sin(t * 2.0F + 1.0F), cfg.textZ());
         float tilt = 0;
         if (t > BOOM) { // blown up and away
             float b = t - BOOM;
