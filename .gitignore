@@ -46,3 +46,6 @@ research/
 logs/
 .claude/
 
+
+# local Anubis jar to build against
+libs/*.jar

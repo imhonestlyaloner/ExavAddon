@@ -24,7 +24,13 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-	modImplementation "net.anubis:anubis-client:${project.anubis_version}"
+	// drop an Anubis jar into libs/ to build against it directly, otherwise it comes from mavenLocal
+	def anubisJars = fileTree(dir: "libs", include: "*nubis*.jar")
+	if (!anubisJars.isEmpty()) {
+		modImplementation files(anubisJars.files)
+	} else {
+		modImplementation "net.anubis:anubis-client:${project.anubis_version}"
+	}
 }
 
 processResources {
