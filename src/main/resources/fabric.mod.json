@@ -5,7 +5,7 @@
   "name": "Exav Addon",
   "description": "Exav addon for Anubis",
   "authors": [
-    "exav"
+    "imhonestlyaloner"
   ],
   "environment": "client",
   "entrypoints": {

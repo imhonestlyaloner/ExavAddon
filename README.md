@@ -1,4 +1,4 @@
-# anubis addon template
+# Exav Addon
 
 empty addon for [Anubis](https://github.com/horuscommand/Anubis-Client). theres one category and one module in it, the module doesnt do anything it just turns on and off lol. clone it and build your stuff on top
 

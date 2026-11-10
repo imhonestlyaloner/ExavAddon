@@ -28,6 +28,6 @@ public final class ExavAddon extends AnubisAddon {
 
     @Override
     public GithubRepo getRepo() {
-        return new GithubRepo("your-name", "exav-addon");
+        return new GithubRepo("imhonestlyaloner", "ExavAddon");
     }
 }
