@@ -6,7 +6,10 @@ import imgui.ImColor;
 import imgui.ImDrawList;
 import java.util.List;
 import java.util.Random;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.network.chat.Component;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
@@ -28,14 +31,16 @@ public final class CakeShow {
     /** where the cake is held up during the show (grip point) and how it's tilted (top toward you a bit) */
     public static final Vector3f SHOW = new Vector3f(-0.47F, 0.0F, -0.24F);
     public static final Quaternionf SHOW_ROT = new Quaternionf().rotationX((float) Math.toRadians(16));
-    private static final Vector3f IMAGE_CENTRE = new Vector3f(-0.53F, 0.52F, -0.36F);
+    /** the message sits just above the sparkler tips, the picture above the message */
+    private static final Vector3f TEXT_CENTRE = new Vector3f(-0.53F, 0.6F, -0.33F);
+    private static final Vector3f IMAGE_CENTRE = new Vector3f(-0.53F, 0.88F, -0.4F);
     private static final float IMAGE_BASE = 0.34F;
 
     public static final Identifier IMAGE = Identifier.fromNamespaceAndPath("exav-addon", "textures/misc/birthday_hat.png");
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
 
-    public record Config(float opacity, float size, int density, float flutter, String palette,
-                         boolean showImage, float imageSize, float imageOpacity, boolean splat, boolean sparklers, float sparkAmount) {
+    public record Config(String text, float textSize, float textOpacity, float opacity, float size, int density, float flutter, String palette,
+                         boolean showImage, float imageSize, float imageOpacity, float imageX, float imageY, float imageZ, boolean splat, boolean sparklers, float sparkAmount) {
     }
 
     private static final int[][] PALETTES = {
@@ -103,6 +108,7 @@ public final class CakeShow {
         Vector3f cakeMid = HolidayAnimation.pointOf(SHOW, SHOW_ROT, scale, skin, 0, 4.0F, 0);
         layout(cfg, cakeTop);
         if (cfg.sparklers() && t >= POP && t < BOOM) sparklers(pose, collector, t, cfg, frame(t, size), scale, light);
+        text(pose, collector, t, cfg);
         RenderType translucent = RenderTypes.entityTranslucent(WHITE);
         int bright = 0xF000F0;
 
@@ -118,7 +124,8 @@ public final class CakeShow {
         if (cfg.showImage() && t >= POP && t < BOOM + 0.9F) {
             float u = (t - POP) / 0.45F;
             float s = IMAGE_BASE * cfg.imageSize() * backOut(Math.min(1.0F, u));
-            Vector3f c = new Vector3f(IMAGE_CENTRE).add(0, 0.012F * (float) Math.sin(t * 2.2F), 0);
+            // the offsets move it right/up/toward you from its default spot above the text
+            Vector3f c = new Vector3f(IMAGE_CENTRE).add(cfg.imageX(), cfg.imageY() + 0.012F * (float) Math.sin(t * 2.2F), cfg.imageZ());
             float spin = 0;
             float a = cfg.imageOpacity();
             if (t > BOOM) { // blown up and away, spinning
@@ -241,6 +248,62 @@ public final class CakeShow {
                         .setNormal(p, 0, 0, side == 0 ? 1 : -1);
             }
         }
+    }
+
+    // ------------------------------------------------------------------ the message, in plain Minecraft text
+
+    private static void text(PoseStack pose, SubmitNodeCollector collector, float t, Config cfg) {
+        if (t < POP || t > BOOM + 1.0F || cfg.text().isBlank()) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return;
+        Font font = mc.font;
+        List<String> lines = wrap(cfg.text(), 22);
+        int widest = 1;
+        for (String l : lines) widest = Math.max(widest, font.width(l));
+        // fit the widest line into about 0.9 blocks, then apply the size setting
+        float px = Math.min(0.009F, 0.9F / widest) * cfg.textSize();
+        float pop = backOut(Math.min(1.0F, (t - POP - 0.1F) / 0.4F));
+        if (pop <= 0.001F) return;
+        float alpha = cfg.textOpacity();
+        Vector3f c = new Vector3f(TEXT_CENTRE).add(0, 0.01F * (float) Math.sin(t * 2.0F + 1.0F), 0);
+        float tilt = 0;
+        if (t > BOOM) { // blown up and away
+            float b = t - BOOM;
+            c.add(-0.15F * b, 0.8F * b - 0.5F * b * b, -0.15F * b);
+            tilt = b * 140.0F;
+            alpha *= 1.0F - HolidayAnimation.smooth(b / 1.0F);
+        }
+        int a = (int) (Math.max(0, Math.min(1, alpha)) * 255);
+        if (a < 5) return;
+        float s = px * pop;
+        pose.pushPose();
+        pose.translate(c.x, c.y, c.z);
+        pose.mulPose(new Quaternionf().rotationZ((float) Math.toRadians(tilt)));
+        pose.scale(s, -s, s); // text draws y-down
+        float lineH = 10;
+        float top = -(lines.size() * lineH - 1) / 2.0F;
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            collector.submitText(pose, -font.width(line) / 2.0F, top + i * lineH, Component.literal(line).getVisualOrderText(),
+                    true, Font.DisplayMode.NORMAL, 0xF000F0, (a << 24) | 0xFFFFFF, 0, 0);
+        }
+        pose.popPose();
+    }
+
+    /** splits on spaces into lines of at most maxChars, keeping the text's own capitals */
+    private static List<String> wrap(String text, int maxChars) {
+        List<String> lines = new java.util.ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String word : text.trim().split("\\s+")) {
+            if (line.length() > 0 && line.length() + 1 + word.length() > maxChars) {
+                lines.add(line.toString());
+                line.setLength(0);
+            }
+            if (line.length() > 0) line.append(' ');
+            line.append(word);
+        }
+        if (line.length() > 0) lines.add(line.toString());
+        return lines;
     }
 
     // ------------------------------------------------------------------ sparklers
