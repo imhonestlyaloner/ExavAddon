@@ -2,7 +2,9 @@ package com.exav.addon.modules;
 
 import com.exav.addon.ExavAddon;
 import com.exav.addon.holiday.SmoothMesh;
+import com.exav.addon.sky.AlwaysEggs;
 import com.exav.addon.sky.SkyArt;
+import com.exav.addon.sky.SongMatch;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -35,14 +37,13 @@ import org.joml.Vector4f;
  * Easter eggs for what's playing in the Spotify HUD:
  *  - Yeat ("Get Busy" style): enormous, realistic metal church bells hang in the sky and ring on the beat with
  *    real weight: they swing and settle, the clapper lags inside, the metal shudders, and the hit kicks the camera
- *  - Insane Clown Posse: the sky goes dark red and your juggalo pictures float around
+ * Insane Clown Posse and Christmas are always on (see AlwaysEggs); this module only holds Yeat and the shared settings.
  * The beat comes from the song's playback position and the BPM setting (Spotify doesn't tell us the tempo).
  */
 public final class ArtistEggs extends ClientModule {
     private static volatile ArtistEggs active;
 
     private final BooleanSetting yeat = addSetting("yeat", new BooleanSetting("Yeat", true));
-    private final BooleanSetting icp = addSetting("icp", new BooleanSetting("Insane Clown Posse", true));
     private final NumberSetting skyTint = addSetting("sky-tint", new NumberSetting("Sky Tint", 0.6F, 0.0F, 1.0F).step(0.05F));
     private final NumberSetting amount = addSetting("amount", new NumberSetting("Amount", 1.0F, 0.3F, 2.0F).step(0.1F));
     private final NumberSetting yeatBpm = addSetting("yeat-bpm", new NumberSetting("Yeat BPM", 150.0F, 60.0F, 200.0F).step(1.0F));
@@ -53,19 +54,19 @@ public final class ArtistEggs extends ClientModule {
     private final NumberSetting impactStrength = addSetting("impact-strength", new NumberSetting("Impact Strength", 1.0F, 0.1F, 2.0F).step(0.1F));
     private final BooleanSetting bellSounds = addSetting("bell-sounds", new BooleanSetting("Bell Sounds", false));
     private final NumberSetting bellVolume = addSetting("bell-volume", new NumberSetting("Bell Volume", 0.5F, 0.0F, 1.0F).step(0.05F));
-    private final ModeSetting preview = addSetting("preview", new ModeSetting("Preview", "Off", "Off", "Yeat", "Insane Clown Posse"));
+    private final ModeSetting preview = addSetting("preview", new ModeSetting("Preview", "Off", "Off", "Yeat", "Insane Clown Posse", "Christmas"));
 
     /** moody, not neon */
-    private static final int YEAT_SKY = 0x5E8F67, YEAT_FOG = 0x2F4A36, ICP_SKY = 0x5B0A12, ICP_FOG = 0x24060A;
+    public static final int YEAT_SKY = 0x5E8F67, YEAT_FOG = 0x2F4A36;
 
-    private float yeatLevel, icpLevel;
+    private float yeatLevel;
     private long lastFrame;
     private long lastEighth = Long.MIN_VALUE;
 
     private static SmoothMesh bellMesh, clapperMesh;
 
     public ArtistEggs() {
-        super("Artist Easter Eggs", "Yeat hangs giant ringing church bells in the sky on the beat; Insane Clown Posse fills the sky with juggalo pictures.", ExavAddon.CATEGORY);
+        super("Artist Easter Eggs", "Yeat (or a feature) hangs giant ringing church bells in the sky on the beat.", ExavAddon.CATEGORY);
         yeatBpm.visibleWhen(yeat::get);
         beatOffset.visibleWhen(yeat::get);
         bellSounds.visibleWhen(yeat::get);
@@ -89,78 +90,48 @@ public final class ArtistEggs extends ClientModule {
     @Override
     protected void onDisable() {
         active = null;
-        yeatLevel = icpLevel = 0;
+        yeatLevel = 0;
     }
 
     // ---------------------------------------------------------------- who's playing
 
-    private static String artistKey(NowPlaying now) {
-        return now == null || now.artist() == null ? "" : now.artist().toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
-    }
-
     private NowPlaying playing() {
-        SpotifyHudModule spotify = SpotifyHudModule.active();
-        NowPlaying now = spotify == null ? null : spotify.nowPlaying();
-        return now != null && now.playing() ? now : null;
+        return SongMatch.playing();
     }
 
+    /** Yeat as the artist or featured on the song */
     private boolean yeatOn() {
         if (preview.is("Yeat")) return true;
-        return yeat.get() && artistKey(playing()).contains("yeat");
-    }
-
-    private boolean icpOn() {
-        if (preview.is("Insane Clown Posse")) return true;
-        return icp.get() && artistKey(playing()).contains("insaneclownposse");
+        return yeat.get() && SongMatch.yeat(playing());
     }
 
     @EventHandler
     public void onTick(TickEvent event) {
         // fade in over 2s, out over 1.5s
-        yeatLevel = step(yeatLevel, yeatOn(), 0.05F / 2.0F, 0.05F / 1.5F);
-        icpLevel = step(icpLevel, icpOn(), 0.05F / 2.0F, 0.05F / 1.5F);
+        yeatLevel = yeatOn() ? Math.min(1, yeatLevel + 0.05F / 2.0F) : Math.max(0, yeatLevel - 0.05F / 1.5F);
     }
 
-    private static float step(float level, boolean on, float up, float down) {
-        return on ? Math.min(1, level + up) : Math.max(0, level - down);
-    }
-
-    // ---------------------------------------------------------------- sky + fog colour (called from mixins)
-
-    public static void tintSky(SkyRenderState state) {
+    /** Preview setting, for the always-on eggs (ICP / Christmas) */
+    public static boolean previewing(String what) {
         ArtistEggs m = active;
-        if (m == null) return;
-        float y = m.yeatLevel * m.skyTint.get(), i = m.icpLevel * m.skyTint.get();
-        if (y > 0) {
-            state.skyColor = blend(state.skyColor, YEAT_SKY, y);
-            state.sunriseAndSunsetColor = blend(state.sunriseAndSunsetColor, YEAT_SKY, y * 0.7F);
-        }
-        if (i > 0) {
-            state.skyColor = blend(state.skyColor, ICP_SKY, i);
-            state.sunriseAndSunsetColor = blend(state.sunriseAndSunsetColor, 0xB0141E, i * 0.7F);
-        }
+        return m != null && m.preview.is(what);
     }
 
-    public static void tintFog(Vector4f fog) {
+    /** how strongly to tint the sky green for Yeat right now (0 when Christmas takes over) */
+    public static float yeatTint() {
         ArtistEggs m = active;
-        if (m == null || fog == null) return;
-        float y = m.yeatLevel * m.skyTint.get(), i = m.icpLevel * m.skyTint.get();
-        if (y > 0) mixInto(fog, YEAT_FOG, y);
-        if (i > 0) mixInto(fog, ICP_FOG, i);
+        if (m == null) return 0;
+        return m.yeatLevel * m.skyTint.get() * (1 - AlwaysEggs.christmasLevel());
     }
 
-    private static void mixInto(Vector4f fog, int rgb, float t) {
-        fog.x += (((rgb >> 16) & 255) / 255.0F - fog.x) * t;
-        fog.y += (((rgb >> 8) & 255) / 255.0F - fog.y) * t;
-        fog.z += ((rgb & 255) / 255.0F - fog.z) * t;
+    public static float skyTintStrength() {
+        ArtistEggs m = active;
+        return m == null ? 0.6F : m.skyTint.get();
     }
 
-    private static int blend(int argb, int rgb, float t) {
-        int a = argb & 0xFF000000;
-        int r = (int) (((argb >> 16) & 255) * (1 - t) + ((rgb >> 16) & 255) * t);
-        int g = (int) (((argb >> 8) & 255) * (1 - t) + ((rgb >> 8) & 255) * t);
-        int b = (int) ((argb & 255) * (1 - t) + (rgb & 255) * t);
-        return a | r << 16 | g << 8 | b;
+    public static float amount() {
+        ArtistEggs m = active;
+        return m == null ? 1.0F : m.amount.get();
     }
 
     // ---------------------------------------------------------------- Yeat: giant bells
@@ -202,7 +173,7 @@ public final class ArtistEggs extends ClientModule {
         lastFrame = nowNs;
         shake *= (float) Math.exp(-dt * 9);
         punch *= (float) Math.exp(-dt * 7);
-        if (yeatLevel <= 0) return;
+        if (yeatLevel <= 0 || AlwaysEggs.christmas()) return; // Christmas takes over the sky
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return;
         if (bellMesh == null) {
@@ -404,91 +375,6 @@ public final class ArtistEggs extends ClientModule {
     public static float fov(float fov) {
         if (active == null || punch < 0.005F) return fov;
         return fov * (1.0F - 0.07F * punch);
-    }
-
-    // ---------------------------------------------------------------- Insane Clown Posse: your pictures floating in the sky
-
-    /** hatchet man logo, Riddle Box clown, the wraith, the two masks */
-    private static final Identifier[] ICP_IMAGES = {
-            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_hatchetman.png"),
-            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_clown.png"),
-            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_wraith.png"),
-            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_masks.png"),
-    };
-
-    /** Called from the world render (camera-relative pose): draws the floating ICP pictures. */
-    public static void submitImages(PoseStack pose, SubmitNodeCollector collector) {
-        ArtistEggs m = active;
-        if (m == null || m.icpLevel <= 0) return;
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.level == null) return;
-        float level = HolidayEase.smooth(m.icpLevel);
-        // closer than the Yeat bells so they stay out of the fog
-        float distance = Math.max(40.0F, Math.min(120.0F, mc.options.getEffectiveRenderDistance() * 16 * 0.5F));
-        float time = (System.nanoTime() % 3_600_000_000_000L) / 1.0E9F;
-        int count = (int) (24 * m.amount.get());
-        List<float[]>[] perImage = new List[ICP_IMAGES.length];
-        for (int k = 0; k < perImage.length; k++) perImage[k] = new ArrayList<>();
-        for (int i = 0; i < count; i++) {
-            int kind = i % ICP_IMAGES.length;
-            float speed = (i % 2 == 0 ? 1 : -1) * (0.012F + 0.008F * (i % 5));
-            float az = i * 2.39996F + time * speed;
-            float el = (float) Math.toRadians(10 + (i * 41 % 50) + 4 * Math.sin(time * 0.4F + i * 0.9F));
-            float dist = distance * (0.85F + 0.15F * ((i * 13) % 7) / 7.0F);
-            float size = dist * 0.17F * level * (0.8F + 0.4F * ((i * 7) % 5) / 5.0F);
-            float roll, bob;
-            switch (kind) {
-                case 0 -> { // hatchet man: running bounce
-                    roll = 8 * (float) Math.sin(time * 6 + i);
-                    bob = 0.04F * Math.abs((float) Math.sin(time * 6 + i));
-                }
-                case 1 -> { // clown: rocking side to side, grinning at you
-                    roll = 14 * (float) Math.sin(time * 1.1F + i);
-                    bob = 0.02F * (float) Math.sin(time * 0.9F + i);
-                }
-                case 2 -> { // wraith: slow eerie float up and down
-                    roll = 4 * (float) Math.sin(time * 0.5F + i);
-                    bob = 0.08F * (float) Math.sin(time * 0.6F + i);
-                }
-                default -> { // masks: swaying
-                    roll = 10 * (float) Math.sin(time * 0.8F + i * 1.3F);
-                    bob = 0.03F * (float) Math.sin(time * 1.2F + i);
-                }
-            }
-            Vector3f dir = direction(az, el);
-            Vector3f centre = new Vector3f(dir).mul(dist).add(0, bob * size * 4, 0);
-            perImage[kind].add(new float[]{centre.x, centre.y, centre.z, size, (float) Math.toRadians(roll), dist});
-        }
-        int alpha = (int) (255 * level);
-        for (int k = 0; k < ICP_IMAGES.length; k++) {
-            List<float[]> items = perImage[k];
-            if (items.isEmpty()) continue;
-            items.sort((a, b) -> Float.compare(b[5], a[5])); // far first
-            collector.submitCustomGeometry(pose, RenderTypes.entityTranslucent(ICP_IMAGES[k]), (p, out) -> {
-                for (float[] it : items) billboard(p, out, it[0], it[1], it[2], it[3] / 2, it[4], alpha);
-            });
-        }
-    }
-
-    /** a square picture centred at (x,y,z) relative to the camera, facing the camera, turned by roll */
-    private static void billboard(PoseStack.Pose p, VertexConsumer out, float x, float y, float z, float half, float roll, int alpha) {
-        Vector3f back = new Vector3f(-x, -y, -z).normalize();
-        Vector3f right = new Vector3f(0, 1, 0).cross(back);
-        if (right.lengthSquared() < 1e-6F) right.set(1, 0, 0);
-        right.normalize();
-        Vector3f up = new Vector3f(back).cross(right).normalize();
-        float c = (float) Math.cos(roll), s = (float) Math.sin(roll);
-        Vector3f r = new Vector3f(right).mul(c).fma(s, up).mul(half);
-        Vector3f u = new Vector3f(up).mul(c).fma(-s, right).mul(half);
-        float[][] corners = {{-1, -1, 0, 1}, {1, -1, 1, 1}, {1, 1, 1, 0}, {-1, 1, 0, 0}};
-        for (float[] k : corners) {
-            out.addVertex(p, x + r.x * k[0] + u.x * k[1], y + r.y * k[0] + u.y * k[1], z + r.z * k[0] + u.z * k[1])
-                    .setColor(255, 255, 255, alpha)
-                    .setUv(k[2], k[3])
-                    .setOverlay(OverlayTexture.NO_OVERLAY)
-                    .setLight(0xF000F0)
-                    .setNormal(p, back.x, back.y, back.z);
-        }
     }
 
     /** tiny easing helper */

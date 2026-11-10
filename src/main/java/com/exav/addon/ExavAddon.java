@@ -4,6 +4,7 @@ import com.exav.addon.modules.ArtistEggs;
 import com.exav.addon.modules.EndSkyLyrics;
 import com.exav.addon.modules.HolidayKnife;
 import com.exav.addon.modules.SusChunkPlus;
+import com.exav.addon.sky.AlwaysEggs;
 import com.exav.addon.util.MyEdits;
 import net.anubis.client.addon.AnubisAddon;
 import net.anubis.client.module.ModuleCategory;
@@ -21,6 +22,7 @@ public final class ExavAddon extends AnubisAddon {
     @Override
     public void onInitialize() {
         MyEdits.init();
+        AlwaysEggs.init();
         ModuleRegistry.add(new SusChunkPlus());
         ModuleRegistry.add(new HolidayKnife());
         ModuleRegistry.add(new EndSkyLyrics());

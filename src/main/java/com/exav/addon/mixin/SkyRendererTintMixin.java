@@ -1,6 +1,6 @@
 package com.exav.addon.mixin;
 
-import com.exav.addon.modules.ArtistEggs;
+import com.exav.addon.sky.AlwaysEggs;
 import net.minecraft.client.Camera;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.SkyRenderer;
@@ -15,6 +15,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class SkyRendererTintMixin {
     @Inject(method = "extractRenderState", at = @At("TAIL"))
     private void exav$tintSky(ClientLevel level, float partialTick, Camera camera, SkyRenderState state, CallbackInfo ci) {
-        ArtistEggs.tintSky(state);
+        AlwaysEggs.tintSky(state);
     }
 }

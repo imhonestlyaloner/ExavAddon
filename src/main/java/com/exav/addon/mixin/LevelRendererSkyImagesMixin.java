@@ -1,6 +1,6 @@
 package com.exav.addon.mixin;
 
-import com.exav.addon.modules.ArtistEggs;
+import com.exav.addon.sky.AlwaysEggs;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.SubmitNodeCollector;
@@ -15,6 +15,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class LevelRendererSkyImagesMixin {
     @Inject(method = "submitEntities", at = @At("TAIL"))
     private void exav$skyImages(PoseStack pose, LevelRenderState state, SubmitNodeCollector collector, CallbackInfo ci) {
-        ArtistEggs.submitImages(pose, collector);
+        AlwaysEggs.submit(pose, collector);
     }
 }

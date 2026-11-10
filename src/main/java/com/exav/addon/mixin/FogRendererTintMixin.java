@@ -1,6 +1,6 @@
 package com.exav.addon.mixin;
 
-import com.exav.addon.modules.ArtistEggs;
+import com.exav.addon.sky.AlwaysEggs;
 import net.minecraft.client.Camera;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.fog.FogRenderer;
@@ -15,6 +15,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class FogRendererTintMixin {
     @Inject(method = "computeFogColor", at = @At("RETURN"))
     private void exav$tintFog(Camera camera, float partialTick, ClientLevel level, int renderDistance, float darken, CallbackInfoReturnable<Vector4f> cir) {
-        ArtistEggs.tintFog(cir.getReturnValue());
+        AlwaysEggs.tintFog(cir.getReturnValue());
     }
 }
