@@ -2,6 +2,7 @@ package com.exav.addon;
 
 import com.exav.addon.modules.BaseFinder;
 import com.exav.addon.modules.DroppedItems;
+import com.exav.addon.modules.EndSkyLyrics;
 import com.exav.addon.modules.HolidayKnife;
 import com.exav.addon.modules.SusChunkPlus;
 import com.exav.addon.util.MyDrops;
@@ -27,6 +28,7 @@ public final class ExavAddon extends AnubisAddon {
         ModuleRegistry.add(new BaseFinder());
         ModuleRegistry.add(new DroppedItems());
         ModuleRegistry.add(new HolidayKnife());
+        ModuleRegistry.add(new EndSkyLyrics());
     }
 
     @Override
