@@ -42,7 +42,7 @@ public final class Merger {
         Map<List<Integer>, List<Tunnel>> lines = new HashMap<>();
         for (ChunkJob.Result r : results) {
             for (Tunnel t : r.tunnels()) {
-                lines.computeIfAbsent(List.of(t.axis(), t.y(), t.lateral()), k -> new ArrayList<>()).add(t);
+                lines.computeIfAbsent(List.of(t.axis(), t.y(), t.lateral(), t.width(), t.height()), k -> new ArrayList<>()).add(t);
             }
         }
         List<Tunnel> merged = new ArrayList<>();
@@ -51,7 +51,7 @@ public final class Merger {
             Tunnel cur = null;
             for (Tunnel t : line) {
                 if (cur != null && t.start() <= cur.end() + 1) {
-                    cur = new Tunnel(cur.axis(), cur.y(), cur.lateral(), cur.start(), Math.max(cur.end(), t.end()));
+                    cur = new Tunnel(cur.axis(), cur.y(), cur.lateral(), cur.start(), Math.max(cur.end(), t.end()), cur.width(), cur.height());
                 } else {
                     if (cur != null) merged.add(cur);
                     cur = t;

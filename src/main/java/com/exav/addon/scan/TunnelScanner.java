@@ -4,12 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Finds straight 3x3 tunnels that pass through one chunk. Runs a bit at a time via {@link #step(long)}.
+ * Finds straight tunnels of an exact size (3x3 by default, 1x2 for branch mines) that pass through one chunk. Runs a bit at a time via {@link #step(long)}.
  *
  * Every candidate 3x3 cross-section ("slice") is checked along X and Z. A slice is:
- *  - NONE when any of its 9 interior blocks isn't open (or it's above the surface)
- *  - GOOD when the interior is open and each of the 4 surrounding sides (floor, ceiling, 2 walls) is at least 2/3 solid,
- *    which is what makes it exactly 3x3 and not part of a bigger room
+ *  - NONE when any of its interior blocks isn't open (or it's above the surface)
+ *  - GOOD when the interior is open and each of the 4 surrounding sides (floor, ceiling, 2 walls) is mostly solid
+ *    (2 of 3, 2 of 2, 1 of 1), which is what makes it exactly that size and not part of a bigger room
  *  - OPEN when the interior is open but the walls aren't (side openings, crossings, caves cutting through)
  * A tunnel is a run of slices with at least minLength GOOD ones and no more than MAX_GAP OPEN slices in a row.
  */
@@ -26,6 +26,8 @@ public final class TunnelScanner {
     private final int chunkX;
     private final int chunkZ;
     private final int minLength;
+    private final int width;
+    private final int height;
     private final int yMax;
     private int y;
     private final List<Tunnel> found = new ArrayList<>();
@@ -38,10 +40,16 @@ public final class TunnelScanner {
     private boolean inRun;
 
     public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength) {
+        this(reader, chunkX, chunkZ, minLength, 3, 3);
+    }
+
+    public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength, int width, int height) {
         this.reader = reader;
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
         this.minLength = minLength;
+        this.width = width;
+        this.height = height;
         this.y = reader.minY() + 1;
         int top = reader.minY();
         for (int x = 0; x < 16; x++) {
@@ -49,7 +57,7 @@ public final class TunnelScanner {
                 top = Math.max(top, reader.surface((chunkX << 4) + x, (chunkZ << 4) + z));
             }
         }
-        this.yMax = top - 3; // the ceiling (y + 3) has to be at or under the surface
+        this.yMax = top - height; // the ceiling (y + height) has to be at or under the surface
     }
 
     /** @return true once the whole chunk has been scanned */
@@ -57,7 +65,7 @@ public final class TunnelScanner {
         while (y <= yMax) {
             for (int axis = 0; axis < 2; axis++) {
                 int lateralBase = axis == 0 ? chunkZ << 4 : chunkX << 4;
-                for (int l = lateralBase - 2; l <= lateralBase + 15; l++) {
+                for (int l = lateralBase - width + 1; l <= lateralBase + 15; l++) {
                     scanLine(axis, y, l);
                 }
             }
@@ -104,7 +112,7 @@ public final class TunnelScanner {
 
     private void finish(int axis, int y, int l, int c0, int c1) {
         if (inRun && good >= minLength && lastGood >= c0 && runStart <= c1) {
-            found.add(new Tunnel(axis, y, l, runStart, lastGood));
+            found.add(new Tunnel(axis, y, l, runStart, lastGood, width, height));
         }
         inRun = false;
         good = 0;
@@ -113,24 +121,31 @@ public final class TunnelScanner {
 
     private byte slice(int axis, int t, int y, int l) {
         // centre first, it rejects almost everything underground
-        if (!at(axis, t, y + 1, l + 1, true)) return NONE;
-        for (int dy = 0; dy < 3; dy++) {
-            for (int dl = 0; dl < 3; dl++) {
+        if (!at(axis, t, y + height / 2, l + width / 2, true)) return NONE;
+        for (int dy = 0; dy < height; dy++) {
+            for (int dl = 0; dl < width; dl++) {
                 if (!at(axis, t, y + dy, l + dl, true)) return NONE;
             }
         }
-        int cx = axis == 0 ? t : l + 1;
-        int cz = axis == 0 ? l + 1 : t;
-        if (reader.surface(cx, cz) < y + 3) return NONE;
+        int cx = axis == 0 ? t : l + width / 2;
+        int cz = axis == 0 ? l + width / 2 : t;
+        if (reader.surface(cx, cz) < y + height) return NONE;
 
         int floor = 0, ceiling = 0, wallA = 0, wallB = 0;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < width; i++) {
             if (at(axis, t, y - 1, l + i, false)) floor++;
-            if (at(axis, t, y + 3, l + i, false)) ceiling++;
-            if (at(axis, t, y + i, l - 1, false)) wallA++;
-            if (at(axis, t, y + i, l + 3, false)) wallB++;
+            if (at(axis, t, y + height, l + i, false)) ceiling++;
         }
-        return floor >= 2 && ceiling >= 2 && wallA >= 2 && wallB >= 2 ? GOOD : OPEN;
+        for (int i = 0; i < height; i++) {
+            if (at(axis, t, y + i, l - 1, false)) wallA++;
+            if (at(axis, t, y + i, l + width, false)) wallB++;
+        }
+        return floor >= need(width) && ceiling >= need(width) && wallA >= need(height) && wallB >= need(height) ? GOOD : OPEN;
+    }
+
+    /** solid blocks needed on a side of n blocks: 1 of 1, 2 of 2, 2 of 3 */
+    private static int need(int n) {
+        return (2 * n + 2) / 3;
     }
 
     /** wantOpen: is the block open; otherwise: is it solid. */

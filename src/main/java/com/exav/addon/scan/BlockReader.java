@@ -62,6 +62,15 @@ public final class BlockReader {
         return SOLID;
     }
 
+    /** The block state, or null if the chunk isn't loaded / outside the world. */
+    public BlockState state(int x, int y, int z) {
+        if (y < minY || y >= maxY) return null;
+        LevelChunk chunk = chunk(x >> 4, z >> 4);
+        if (chunk == null) return null;
+        pos.set(x, y, z);
+        return chunk.getBlockState(pos);
+    }
+
     public boolean open(int x, int y, int z) {
         return get(x, y, z) == OPEN;
     }
