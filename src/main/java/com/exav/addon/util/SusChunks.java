@@ -1,0 +1,36 @@
+package com.exav.addon.util;
+
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import net.anubis.client.module.ModuleRegistry;
+import net.anubis.client.module.impl.render.BetterSusChunkModule;
+import net.anubis.client.module.impl.render.SusChunkFinderModule;
+
+/** Reads which chunks Anubis's sus chunk modules have flagged right now. */
+public final class SusChunks {
+    public static final String BOTH = "Both";
+    public static final String FINDER = "Sus Chunk Finder";
+    public static final String BETTER = "Better Sus Chunk";
+    public static final String[] SOURCES = {BOTH, FINDER, BETTER};
+
+    private SusChunks() {
+    }
+
+    public static LongSet finder() {
+        SusChunkFinderModule m = ModuleRegistry.get(SusChunkFinderModule.class);
+        return m != null && m.isEnabled() ? m.flaggedChunks() : LongSet.of();
+    }
+
+    public static LongSet better() {
+        BetterSusChunkModule m = ModuleRegistry.get(BetterSusChunkModule.class);
+        return m != null && m.isEnabled() ? m.flaggedChunks() : LongSet.of();
+    }
+
+    /** Union of the flagged chunks of the chosen source(s). */
+    public static LongOpenHashSet flagged(String source) {
+        LongOpenHashSet out = new LongOpenHashSet();
+        if (!BETTER.equals(source)) out.addAll(finder());
+        if (!FINDER.equals(source)) out.addAll(better());
+        return out;
+    }
+}

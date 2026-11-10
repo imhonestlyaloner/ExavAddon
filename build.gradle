@@ -10,6 +10,11 @@ base {
 }
 
 repositories {
+	// imgui-java (anubis bundles it, we only compile against it)
+	maven {
+		url = "https://repo1.maven.org/maven2/"
+		content { includeGroup "io.github.spair" }
+	}
 	// anubis isnt on a public maven, run `gradlew publishToMavenLocal` in the anubis repo and it shows up here
 	mavenLocal {
 		content { includeGroup "net.anubis" }
@@ -31,6 +36,8 @@ dependencies {
 	} else {
 		modImplementation "net.anubis:anubis-client:${project.anubis_version}"
 	}
+	// anubis ships imgui inside its jar, this is just so HUD overlay code compiles
+	compileOnly "io.github.spair:imgui-java-binding:1.90.0"
 }
 
 processResources {

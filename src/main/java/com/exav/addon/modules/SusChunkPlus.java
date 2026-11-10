@@ -4,6 +4,7 @@ import com.exav.addon.ExavAddon;
 import com.exav.addon.scan.BlockReader;
 import com.exav.addon.scan.ChunkJob;
 import com.exav.addon.scan.Merger;
+import com.exav.addon.util.SusChunks;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
 import it.unimi.dsi.fastutil.longs.LongIterator;
@@ -17,9 +18,6 @@ import net.anubis.client.event.EventHandler;
 import net.anubis.client.event.impl.Render3DEvent;
 import net.anubis.client.event.impl.TickEvent;
 import net.anubis.client.module.ClientModule;
-import net.anubis.client.module.ModuleRegistry;
-import net.anubis.client.module.impl.render.BetterSusChunkModule;
-import net.anubis.client.module.impl.render.SusChunkFinderModule;
 import net.anubis.client.module.setting.BooleanSetting;
 import net.anubis.client.module.setting.ColorSetting;
 import net.anubis.client.module.setting.ModeSetting;
@@ -38,17 +36,13 @@ import net.minecraft.world.phys.Vec3;
  * the 3x3 tunnels running through it and the caves around it.
  */
 public final class SusChunkPlus extends ClientModule {
-    private static final String SOURCE_BOTH = "Both";
-    private static final String SOURCE_FINDER = "Sus Chunk Finder";
-    private static final String SOURCE_BETTER = "Better Sus Chunk";
-
     private static final ExecutorService MERGE_THREAD = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "Exav SusChunkPlus merge");
         t.setDaemon(true);
         return t;
     });
 
-    private final ModeSetting source = addSetting("source", new ModeSetting("Source", SOURCE_BOTH, SOURCE_BOTH, SOURCE_FINDER, SOURCE_BETTER));
+    private final ModeSetting source = addSetting("source", new ModeSetting("Source", SusChunks.BOTH, SusChunks.SOURCES));
 
     private final BooleanSetting tunnels = addSetting("tunnels", new BooleanSetting("Tunnels", true));
     private final NumberSetting minTunnelLength = addSetting("min-tunnel-length", new NumberSetting("Min Tunnel Length", 8.0F, 4.0F, 32.0F).step(1.0F));
@@ -79,7 +73,7 @@ public final class SusChunkPlus extends ClientModule {
     private volatile Merger.Output output = Merger.Output.EMPTY;
 
     public SusChunkPlus() {
-        super("Sus Chunk Plus", "When a sus chunk gets flagged, also labels 3x3 tunnels through it and caves around it.", ExavAddon.CATEGORY);
+        super("Exav's Relog Alternative", "When a sus chunk gets flagged, also labels 3x3 tunnels through it and caves around it.", ExavAddon.CATEGORY);
         minTunnelLength.visibleWhen(tunnels::get);
         tunnelColor.visibleWhen(tunnels::get);
         caveRadius.visibleWhen(caves::get);
@@ -129,7 +123,7 @@ public final class SusChunkPlus extends ClientModule {
         if (level == null) return;
         ticks++;
 
-        LongOpenHashSet flagged = flaggedChunks();
+        LongOpenHashSet flagged = SusChunks.flagged(source.get());
 
         // forget chunks that aren't flagged anymore
         for (LongIterator it = results.keySet().iterator(); it.hasNext(); ) {
@@ -186,19 +180,6 @@ public final class SusChunkPlus extends ClientModule {
                     merging = false;
                     if (error == null && gen == generation && isEnabled()) output = out;
                 }));
-    }
-
-    private LongOpenHashSet flaggedChunks() {
-        LongOpenHashSet out = new LongOpenHashSet();
-        if (!source.is(SOURCE_BETTER)) {
-            SusChunkFinderModule finder = ModuleRegistry.get(SusChunkFinderModule.class);
-            if (finder != null && finder.isEnabled()) out.addAll(finder.flaggedChunks());
-        }
-        if (!source.is(SOURCE_FINDER)) {
-            BetterSusChunkModule better = ModuleRegistry.get(BetterSusChunkModule.class);
-            if (better != null && better.isEnabled()) out.addAll(better.flaggedChunks());
-        }
-        return out;
     }
 
     @EventHandler
