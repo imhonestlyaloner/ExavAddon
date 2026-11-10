@@ -21,7 +21,8 @@ public final class HolidayAnimation {
     public enum Skin {
         CANDY_CANE("Candy Cane", 3.4F, 0.021F, HolidayModels.CANE_GRIP_X, HolidayModels.CANE_GRIP_Y, 0.0F),
         HOT_COCOA("Hot Cocoa", 5.0F, 0.024F, HolidayModels.MUG_GRIP_X, HolidayModels.MUG_GRIP_Y, 0.0F),
-        GINGERBREAD("Gingerbread Man", 4.6F, 0.022F, HolidayModels.GINGER_GRIP_X, HolidayModels.GINGER_GRIP_Y, 0.0F);
+        GINGERBREAD("Gingerbread Man", 4.6F, 0.022F, HolidayModels.GINGER_GRIP_X, HolidayModels.GINGER_GRIP_Y, 0.0F),
+        BIRTHDAY_CAKE("Birthday Cake", CakeShow.END, 0.022F, HolidayModels.CAKE_GRIP_X, HolidayModels.CAKE_GRIP_Y, 0.0F);
 
         public final String label;
         public final float seconds;
@@ -53,6 +54,8 @@ public final class HolidayAnimation {
                 case HOT_COCOA -> new Quaternionf().rotationY((float) Math.toRadians(-20));
                 // upright, facing you, slightly tilted
                 case GINGERBREAD -> new Quaternionf().rotationZ((float) Math.toRadians(8)).rotateY((float) Math.toRadians(-15));
+                // flat on your palm, tipped toward you a little
+                case BIRTHDAY_CAKE -> new Quaternionf().rotationX((float) Math.toRadians(10));
             };
         }
     }
@@ -72,6 +75,8 @@ public final class HolidayAnimation {
         public final Vector3f item = new Vector3f();
         public final Quaternionf rotation = new Quaternionf();
         public boolean bitten;
+        /** 0 = item not shown (the cake after it blew up) */
+        public float itemScale = 1.0F;
         /** gingerbread waving arm: shoulder and elbow angles, degrees (0 = straight out sideways) */
         public float upperArm = REST_UPPER, foreArm = REST_FORE;
         /** marshmallows already in the mug */
@@ -98,6 +103,7 @@ public final class HolidayAnimation {
             case CANDY_CANE -> candyCane(t, size);
             case HOT_COCOA -> hotCocoa(t, size);
             case GINGERBREAD -> gingerbread(t, size);
+            case BIRTHDAY_CAKE -> CakeShow.frame(t, size);
         };
     }
 

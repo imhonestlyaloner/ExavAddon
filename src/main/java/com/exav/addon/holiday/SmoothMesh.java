@@ -36,6 +36,20 @@ public final class SmoothMesh {
         }
     }
 
+    /** Same, multiplying every colour by {@code tint} (ARGB, so its alpha fades the whole mesh). */
+    public void emit(PoseStack.Pose pose, VertexConsumer out, int light, int tint) {
+        float ta = ((tint >>> 24) & 255) / 255.0F, tr = ((tint >> 16) & 255) / 255.0F, tg = ((tint >> 8) & 255) / 255.0F, tb = (tint & 255) / 255.0F;
+        for (int v = 0; v < quads * 4; v++) {
+            int p = v * 3, c = color[v];
+            out.addVertex(pose, pos[p], pos[p + 1], pos[p + 2])
+                    .setColor((int) (((c >> 16) & 255) * tr), (int) (((c >> 8) & 255) * tg), (int) ((c & 255) * tb), (int) (255 * ta))
+                    .setUv(0.5F, 0.5F)
+                    .setOverlay(OverlayTexture.NO_OVERLAY)
+                    .setLight(light)
+                    .setNormal(pose, normal[p], normal[p + 1], normal[p + 2]);
+        }
+    }
+
     /** One corner: position, normal, colour (RGB). */
     public record V(float x, float y, float z, float nx, float ny, float nz, int rgb) {
         public static V of(Vector3f p, Vector3f n, int rgb) {

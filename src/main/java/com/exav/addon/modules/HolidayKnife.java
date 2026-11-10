@@ -1,6 +1,7 @@
 package com.exav.addon.modules;
 
 import com.exav.addon.ExavAddon;
+import com.exav.addon.holiday.CakeShow;
 import com.exav.addon.holiday.HandArm;
 import com.exav.addon.holiday.HolidayAnimation;
 import com.exav.addon.holiday.HolidayAnimation.Skin;
@@ -13,7 +14,13 @@ import net.anubis.client.event.Stage;
 import net.anubis.client.event.impl.KeyInputEvent;
 import net.anubis.client.event.impl.MouseInputEvent;
 import net.anubis.client.event.impl.TickEvent;
+import imgui.ImDrawList;
 import net.anubis.client.module.ClientModule;
+import net.anubis.client.module.HudOverlayProvider;
+import net.anubis.client.module.setting.StringSetting;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.anubis.client.module.setting.BooleanSetting;
 import net.anubis.client.module.setting.KeySetting;
 import net.anubis.client.module.setting.ModeSetting;
@@ -36,31 +43,54 @@ import org.joml.Vector3f;
  * Candy Cane (toss, catch by the hook, bite), Hot Cocoa (catch falling marshmallows, sip),
  * Gingerbread Man (he waves, you bite his head). Takes over from CS Knife while it's on.
  */
-public final class HolidayKnife extends ClientModule {
+public final class HolidayKnife extends ClientModule implements HudOverlayProvider {
     /** plain white 8x8 texture shipped with Anubis; colours come from the vertices */
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
     private static volatile HolidayKnife active;
 
     private final ModeSetting skin = addSetting("skin", new ModeSetting("Knife Skin", Skin.CANDY_CANE.label,
-            Skin.CANDY_CANE.label, Skin.HOT_COCOA.label, Skin.GINGERBREAD.label));
+            Skin.CANDY_CANE.label, Skin.HOT_COCOA.label, Skin.GINGERBREAD.label, Skin.BIRTHDAY_CAKE.label));
     private final ModeSetting caneColors = addSetting("cane-colors", new ModeSetting("Cane Colors", "Red & White", "Red & White", "Red & Green"));
     private final KeySetting key = addSetting("key", new KeySetting("Inspect Key", 70)); // F
     private final NumberSetting speed = addSetting("speed", new NumberSetting("Speed", 1.0F, 0.5F, 2.0F).step(0.05F));
     private final NumberSetting size = addSetting("size", new NumberSetting("Knife Size", 1.0F, 0.5F, 2.0F).step(0.05F));
-    private final BooleanSetting showArm = addSetting("show-arm", new BooleanSetting("Show Arm", true));
+    private final BooleanSetting hideHand = addSetting("hide-hand", new BooleanSetting("Hide Hand Model", false));
+    private final NumberSetting volume = addSetting("volume", new NumberSetting("Sound Volume", 100.0F, 0.0F, 100.0F).step(5.0F));
+    // birthday cake
+    private final StringSetting cakeText = addSetting("cake-text", new StringSetting("Confetti Text", "Happy Birthday Valk"));
+    private final NumberSetting confettiOpacity = addSetting("confetti-opacity", new NumberSetting("Confetti Opacity", 90.0F, 10.0F, 100.0F).step(5.0F));
+    private final NumberSetting confettiSize = addSetting("confetti-size", new NumberSetting("Confetti Size", 1.0F, 0.4F, 2.0F).step(0.05F));
+    private final NumberSetting confettiAmount = addSetting("confetti-amount", new NumberSetting("Confetti Amount", 2.0F, 1.0F, 4.0F).step(1.0F));
+    private final NumberSetting confettiFlutter = addSetting("confetti-flutter", new NumberSetting("Confetti Flutter", 1.0F, 0.0F, 3.0F).step(0.1F));
+    private final ModeSetting confettiColors = addSetting("confetti-colors", new ModeSetting("Confetti Colors", "Rainbow", CakeShow.PALETTE_NAMES));
+    private final BooleanSetting showImage = addSetting("show-image", new BooleanSetting("Show Picture", true));
+    private final NumberSetting imageSize = addSetting("image-size", new NumberSetting("Picture Size", 1.0F, 0.4F, 2.0F).step(0.05F));
+    private final NumberSetting imageOpacity = addSetting("image-opacity", new NumberSetting("Picture Opacity", 100.0F, 10.0F, 100.0F).step(5.0F));
+    private final BooleanSetting faceSplat = addSetting("face-splat", new BooleanSetting("Cake In Your Face", true));
     private final BooleanSetting sneakSkips = addSetting("sneak-skips", new BooleanSetting("Sneak Skips Inspect", true));
 
     private boolean inspecting;
     private long startedAt;
     private Skin playing;
+    private float lastT;
     private int heldSlot = -1;
+    private final CakeShow cakeShow = new CakeShow();
+    private static final SoundEvent PARTY_HORN = SoundEvent.createVariableRangeEvent(Identifier.fromNamespaceAndPath("exav-addon", "party_horn"));
     private Item heldItem;
 
     private static SmoothMesh caneRW, caneRWBitten, caneRG, caneRGBitten, mug, mallow, gingerWhole, gingerBitten, gingerUpper, gingerFore,
-            crumbRed, crumbWhite, crumbGreen, crumbCookie;
+            crumbRed, crumbWhite, crumbGreen, crumbCookie, cake, flame, dynamite, puff;
+    private static SmoothMesh[] cakeChunks;
 
     public HolidayKnife() {
-        super("Holiday Knife", "Candy cane, hot cocoa or gingerbread man skins for your sword, each with its own inspect animation (F by default).", ExavAddon.CATEGORY);
+        super("Holiday Knife", "Candy cane, hot cocoa, gingerbread man or birthday cake skins for your sword, each with its own inspect animation (F by default).", ExavAddon.CATEGORY);
+        caneColors.visibleWhen(() -> skin.is(Skin.CANDY_CANE.label));
+        for (var s : new net.anubis.client.module.setting.Setting[]{cakeText, confettiOpacity, confettiSize, confettiAmount, confettiFlutter,
+                confettiColors, showImage, imageSize, imageOpacity, faceSplat}) {
+            s.visibleWhen(() -> skin.is(Skin.BIRTHDAY_CAKE.label));
+        }
+        imageSize.visibleWhen(() -> skin.is(Skin.BIRTHDAY_CAKE.label) && showImage.get());
+        imageOpacity.visibleWhen(() -> skin.is(Skin.BIRTHDAY_CAKE.label) && showImage.get());
     }
 
     @Override
@@ -97,6 +127,7 @@ public final class HolidayKnife extends ClientModule {
             inspecting = true;
             startedAt = System.nanoTime();
             playing = Skin.of(skin.get());
+            lastT = -1;
         }
         return true;
     }
@@ -135,10 +166,12 @@ public final class HolidayKnife extends ClientModule {
         Skin current = Skin.of(skin.get());
         float knifeSize = size.get();
         HolidayAnimation.Frame f;
+        float t = -1;
         if (inspecting && playing == current) {
-            float t = (System.nanoTime() - startedAt) / 1.0E9F * speed.get();
+            t = (System.nanoTime() - startedAt) / 1.0E9F * speed.get();
             if (t >= current.seconds) {
                 inspecting = false;
+                t = -1;
                 f = HolidayAnimation.rest(current);
             } else {
                 f = HolidayAnimation.at(current, t, knifeSize);
@@ -153,7 +186,7 @@ public final class HolidayKnife extends ClientModule {
         pose.pushPose();
         if (left) pose.scale(-1.0F, 1.0F, 1.0F);
 
-        if (showArm.get()) {
+        if (!hideHand.get()) {
             HandArm arm = HandArm.current();
             if (arm != null) {
                 Vector3f elbow = new Vector3f(f.hand).fma(0.6F, HandArm.FOREARM);
@@ -161,11 +194,20 @@ public final class HolidayKnife extends ClientModule {
             }
         }
 
+        if (current == Skin.BIRTHDAY_CAKE) {
+            if (t >= 0) {
+                sounds(t);
+                cakeShow.draw(pose, collector, light, t, knifeSize, cakeConfig(), dynamite, puff, flame, cakeChunks);
+            }
+            lastT = t;
+        }
+
         // the item, in its own model space
         pose.pushPose();
         pose.translate(f.item.x, f.item.y, f.item.z);
         pose.mulPose(f.rotation);
-        pose.scale(scale, scale, scale);
+        float shown = scale * f.itemScale;
+        pose.scale(shown, shown, shown);
         pose.translate(-current.gripX, -current.gripY, -current.gripZ);
         switch (current) {
             case CANDY_CANE -> {
@@ -182,6 +224,22 @@ public final class HolidayKnife extends ClientModule {
                     pose.mulPose(Axis.XP.rotationDegrees(i % 2 == 0 ? 12.0F : -9.0F));
                     submit(pose, collector, type, mallow, light);
                     pose.popPose();
+                }
+            }
+            case BIRTHDAY_CAKE -> {
+                if (f.itemScale > 0.001F) {
+                    submit(pose, collector, type, cake, light);
+                    float now = System.nanoTime() / 1.0E9F;
+                    for (int i = 0; i < HolidayModels.CANDLES.length; i++) {
+                        float[] c = HolidayModels.CANDLES[i];
+                        pose.pushPose();
+                        pose.translate(c[0], HolidayModels.CANDLE_TOP_Y + 0.35F, c[1]);
+                        float flick = 1.0F + 0.12F * (float) Math.sin(now * 17 + i * 2.3F) + 0.06F * (float) Math.sin(now * 29 + i);
+                        pose.mulPose(Axis.ZP.rotationDegrees(6.0F * (float) Math.sin(now * 9 + i)));
+                        pose.scale(1.0F, flick, 1.0F);
+                        submit(pose, collector, type, flame, 0xF000F0);
+                        pose.popPose();
+                    }
                 }
             }
             case GINGERBREAD -> {
@@ -224,6 +282,36 @@ public final class HolidayKnife extends ClientModule {
         pose.popPose();
     }
 
+    private CakeShow.Config cakeConfig() {
+        return new CakeShow.Config(cakeText.get(), confettiOpacity.get() / 100.0F, confettiSize.get(), confettiAmount.getInt(),
+                confettiFlutter.get(), confettiColors.get(), showImage.get(), imageSize.get(), imageOpacity.get() / 100.0F, faceSplat.get());
+    }
+
+    /** party horn when the confetti pops, fuse hiss when the dynamite lands, boom when it goes off */
+    private void sounds(float t) {
+        float vol = volume.get() / 100.0F;
+        if (vol <= 0) return;
+        var sounds = Minecraft.getInstance().getSoundManager();
+        if (crossed(t, CakeShow.POP)) sounds.play(SimpleSoundInstance.forUI(PARTY_HORN, 1.0F, vol));
+        if (crossed(t, CakeShow.LAND)) sounds.play(SimpleSoundInstance.forUI(SoundEvents.TNT_PRIMED, 1.0F, 0.6F * vol));
+        if (crossed(t, CakeShow.BOOM)) sounds.play(SimpleSoundInstance.forUI(SoundEvents.GENERIC_EXPLODE.value(), 1.0F, vol));
+    }
+
+    private boolean crossed(float t, float at) {
+        return lastT < at && t >= at;
+    }
+
+    @Override
+    public boolean isHudOverlayEnabled() {
+        if (!isEnabled() || !inspecting || playing != Skin.BIRTHDAY_CAKE || !faceSplat.get()) return false;
+        return CakeShow.splatting((System.nanoTime() - startedAt) / 1.0E9F * speed.get());
+    }
+
+    @Override
+    public void renderHudOverlay(ImDrawList dl, float screenW, float screenH) {
+        CakeShow.overlay(dl, screenW, screenH, (System.nanoTime() - startedAt) / 1.0E9F * speed.get());
+    }
+
     private static void submit(PoseStack pose, SubmitNodeCollector collector, RenderType type, SmoothMesh mesh, int light) {
         collector.submitCustomGeometry(pose, type, (p, out) -> mesh.emit(p, out, light));
     }
@@ -244,5 +332,17 @@ public final class HolidayKnife extends ClientModule {
         crumbWhite = HolidayModels.crumb(HolidayModels.WHITE);
         crumbGreen = HolidayModels.crumb(HolidayModels.GREEN);
         crumbCookie = HolidayModels.crumb(HolidayModels.CRUMB_COOKIE);
+        cake = HolidayModels.cake();
+        flame = HolidayModels.flame();
+        dynamite = HolidayModels.dynamite();
+        puff = HolidayModels.puff();
+        // lumps of cake for the explosion (unit size, scaled when drawn)
+        int[] lump = {0xF48FB1, 0xFFF8F2, 0xB3E5FC, 0xF0CD82, 0xF06292};
+        cakeChunks = new SmoothMesh[lump.length];
+        for (int i = 0; i < lump.length; i++) {
+            SmoothMesh.Builder b = new SmoothMesh.Builder();
+            com.exav.addon.holiday.Shapes.sphere(b, 0, 0, 0, 1.0F, lump[i], 5);
+            cakeChunks[i] = b.build();
+        }
     }
 }

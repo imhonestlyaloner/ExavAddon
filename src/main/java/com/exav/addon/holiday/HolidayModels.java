@@ -209,6 +209,95 @@ public final class HolidayModels {
         return b.build();
     }
 
+    // ---------------------------------------------------------------- birthday cake
+    /** held from under the plate */
+    public static final float CAKE_GRIP_X = 0.0F, CAKE_GRIP_Y = -1.6F;
+    public static final float CAKE_TOP_Y = 8.7F, CANDLE_TOP_Y = 12.4F;
+    /** candle positions on the top tier (x, z) */
+    public static final float[][] CANDLES = {{0, 0}, {2.3F, 1.0F}, {-2.2F, 1.2F}, {1.0F, -2.3F}, {-1.3F, -2.1F}};
+    private static final int[] CANDLE_COLORS = {0x42A5F5, 0xEC407A, 0xFFCA28, 0x66BB6A, 0xAB47BC};
+    private static final int PLATE = 0xF2F2F5, SPONGE_PINK = 0xF48FB1, FROST_WHITE = 0xFFF8F2, TOP_TIER = 0xB3E5FC, DRIP_PINK = 0xF06292;
+    private static final int[] SPRINKLES = {0xE53935, 0xFDD835, 0x43A047, 0x1E88E5, 0x8E24AA, 0xFB8C00, 0xFFFFFF};
+
+    public static SmoothMesh cake() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        // plate
+        Shapes.lathe(b, new float[][]{{0, -1.6F}, {6.8F, -1.6F}, {8.2F, -0.95F}, {8.3F, -0.7F}, {7.6F, -0.75F}, {0, -0.75F}}, 36, true, (y, a, i) -> PLATE);
+        // bottom tier: pink with white frosting dripping down from the top edge
+        Shapes.lathe(b, new float[][]{{0, -0.75F}, {6.0F, -0.75F}, {6.1F, -0.5F}, {6.1F, 1.0F}, {6.1F, 2.0F}, {6.1F, 2.8F}, {6.1F, 3.4F},
+                {6.1F, 3.9F}, {5.85F, 4.5F}, {5.2F, 4.65F}, {0, 4.65F}}, 48, true, (y, a, i) -> {
+            float drip = 3.0F - 1.4F * (float) Math.max(0, Math.sin(a * 9)) - 0.6F * (float) Math.max(0, Math.sin(a * 23 + 1));
+            return y >= drip ? FROST_WHITE : SPONGE_PINK;
+        });
+        // top tier: light blue with pink drips
+        Shapes.lathe(b, new float[][]{{0, 4.65F}, {4.2F, 4.65F}, {4.25F, 5.0F}, {4.25F, 6.2F}, {4.25F, 7.0F}, {4.25F, 7.6F}, {4.25F, 8.1F},
+                {4.05F, 8.6F}, {3.6F, CAKE_TOP_Y}, {0, CAKE_TOP_Y}}, 40, true, (y, a, i) -> {
+            float drip = 7.3F - 1.2F * (float) Math.max(0, Math.sin(a * 7 + 0.5)) - 0.5F * (float) Math.max(0, Math.sin(a * 17));
+            return y >= drip ? DRIP_PINK : TOP_TIER;
+        });
+        // sprinkles on top and on the ledge of the bottom tier
+        java.util.Random r = new java.util.Random(12);
+        for (int i = 0; i < 46; i++) {
+            double a = r.nextDouble() * Math.PI * 2;
+            boolean top = i < 24;
+            float rad = top ? 0.6F + r.nextFloat() * 3.0F : 4.55F + r.nextFloat() * 1.0F;
+            float x = rad * (float) Math.cos(a), z = rad * (float) Math.sin(a);
+            if (top && near(x, z)) continue;
+            Shapes.sphere(b, x, top ? CAKE_TOP_Y + 0.1F : 4.75F, z, 0.28F, SPRINKLES[i % SPRINKLES.length], 3);
+        }
+        // candles with stripes and wicks
+        for (int c = 0; c < CANDLES.length; c++) {
+            float cx = CANDLES[c][0], cz = CANDLES[c][1];
+            int col = CANDLE_COLORS[c];
+            java.util.List<Vector3f> path = new java.util.ArrayList<>();
+            for (float y = CAKE_TOP_Y - 0.3F; y <= CANDLE_TOP_Y; y += 0.25F) path.add(new Vector3f(cx, y, cz));
+            Shapes.tube(b, path, s -> 0.38F, (s, a) -> {
+                float f = s / 1.1F + a / (float) (Math.PI * 2);
+                return f - (float) Math.floor(f) < 0.5F ? col : 0xFFFFFF;
+            }, 10);
+            java.util.List<Vector3f> wick = java.util.List.of(new Vector3f(cx, CANDLE_TOP_Y, cz), new Vector3f(cx, CANDLE_TOP_Y + 0.5F, cz));
+            Shapes.tube(b, wick, s -> 0.09F, (s, a) -> 0x222222, 6);
+        }
+        return b.build();
+    }
+
+    private static boolean near(float x, float z) {
+        for (float[] c : CANDLES) {
+            if (Math.hypot(x - c[0], z - c[1]) < 0.8) return true;
+        }
+        return false;
+    }
+
+    /** a teardrop flame, base at (0,0,0), drawn on top of each candle wick */
+    public static SmoothMesh flame() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.lathe(b, new float[][]{{0, 0}, {0.32F, 0.15F}, {0.42F, 0.45F}, {0.36F, 0.85F}, {0.2F, 1.25F}, {0, 1.6F}}, 10, true,
+                (y, a, i) -> Shapes.mix(0xFF8F00, 0xFFF59D, y / 1.4F));
+        return b.build();
+    }
+
+    /** a stick of dynamite, bottom at (0,0,0), with a curly fuse out of the top */
+    public static final float DYNAMITE_LEN = 7.0F;
+    public static final float[][] FUSE = {{0, 7.0F}, {0.2F, 7.7F}, {0.8F, 8.3F}, {1.5F, 8.5F}, {2.0F, 9.1F}, {2.1F, 9.8F}};
+
+    public static SmoothMesh dynamite() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        java.util.List<Vector3f> body = new java.util.ArrayList<>();
+        for (float y = 0; y <= DYNAMITE_LEN; y += 0.25F) body.add(new Vector3f(0, y, 0));
+        Shapes.tube(b, body, s -> 1.15F, (s, a) -> (s > 0.6F && s < 1.2F) || (s > 5.8F && s < 6.4F) ? 0xE8D3A6 : 0xC62828, 16);
+        java.util.List<Vector3f> fuse = new java.util.ArrayList<>();
+        for (float[] p : FUSE) fuse.add(new Vector3f(p[0], p[1], 0));
+        Shapes.tube(b, fuse, s -> 0.16F, (s, a) -> 0x3E3A36, 6);
+        return b.build();
+    }
+
+    /** a round puff, for smoke and the explosion flash (coloured when drawn) */
+    public static SmoothMesh puff() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.sphere(b, 0, 0, 0, 1.0F, 0xFFFFFF, 8);
+        return b.build();
+    }
+
     // ---------------------------------------------------------------- crumbs
     public static SmoothMesh crumb(int rgb) {
         SmoothMesh.Builder b = new SmoothMesh.Builder();
