@@ -39,18 +39,8 @@ public final class SusChunks {
         return out;
     }
 
-    /**
-     * Flagged chunks for the Exav modules. When Sus Chunk Confidence is on and filtering, only its confident
-     * chunks (plus their AFK spot chunks) are returned.
-     */
+    /** Union of the flagged chunks of the chosen source(s). */
     public static LongOpenHashSet flagged(String source) {
-        LongSet accepted = com.exav.addon.modules.SusConfidence.acceptedChunks();
-        if (accepted != null) return new LongOpenHashSet(accepted);
-        return flaggedRaw(source);
-    }
-
-    /** Union of the flagged chunks of the chosen source(s), unfiltered. */
-    public static LongOpenHashSet flaggedRaw(String source) {
         LongOpenHashSet out = new LongOpenHashSet();
         if (!BETTER.equals(source)) out.addAll(finder());
         if (!FINDER.equals(source)) out.addAll(better());

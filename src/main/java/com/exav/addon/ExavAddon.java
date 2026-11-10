@@ -3,7 +3,6 @@ package com.exav.addon;
 import com.exav.addon.modules.BaseFinder;
 import com.exav.addon.modules.DroppedItems;
 import com.exav.addon.modules.SusChunkPlus;
-import com.exav.addon.modules.SusConfidence;
 import com.exav.addon.util.MyDrops;
 import com.exav.addon.util.MyEdits;
 import net.anubis.client.addon.AnubisAddon;
@@ -26,7 +25,6 @@ public final class ExavAddon extends AnubisAddon {
         ModuleRegistry.add(new SusChunkPlus());
         ModuleRegistry.add(new BaseFinder());
         ModuleRegistry.add(new DroppedItems());
-        ModuleRegistry.add(new SusConfidence());
     }
 
     @Override

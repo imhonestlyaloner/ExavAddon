@@ -212,8 +212,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         if (level == null) return;
         ticks++;
 
-        // unfiltered: Sus Chunk Confidence uses Base Finder's % to decide, so Base Finder has to see every flag
-        flagged = SusChunks.flaggedRaw(source.get());
+        flagged = SusChunks.flagged(source.get());
         for (LongIterator it = results.keySet().iterator(); it.hasNext(); ) {
             if (!flagged.contains(it.nextLong())) it.remove();
         }
