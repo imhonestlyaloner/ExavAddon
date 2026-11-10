@@ -16,6 +16,12 @@ import net.anubis.client.module.setting.BooleanSetting;
 import net.anubis.client.module.setting.ModeSetting;
 import net.anubis.client.module.setting.NumberSetting;
 import net.anubis.client.util.WorldQuads;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.Identifier;
 import net.anubis.client.util.spotify.NowPlaying;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.state.SkyRenderState;
@@ -53,11 +59,10 @@ public final class ArtistEggs extends ClientModule {
     private long lastFrame;
     private long lastEighth = Long.MIN_VALUE;
 
-    private static SmoothMesh bell, greenSparkle, hatchetMan, hatchet;
-    private static SmoothMesh[] faces, faygos;
+    private static SmoothMesh bell, greenSparkle;
 
     public ArtistEggs() {
-        super("Artist Easter Eggs", "Yeat turns the sky green with bells on the beat; Insane Clown Posse fills the sky with juggalo stuff.", ExavAddon.CATEGORY);
+        super("Artist Easter Eggs", "Yeat turns the sky green with bells on the beat; Insane Clown Posse fills the sky with juggalo pictures.", ExavAddon.CATEGORY);
         yeatBpm.visibleWhen(yeat::get);
         beatOffset.visibleWhen(yeat::get);
         bellSounds.visibleWhen(yeat::get);
@@ -155,7 +160,7 @@ public final class ArtistEggs extends ClientModule {
 
     @EventHandler
     public void onRender3D(Render3DEvent event) {
-        if (yeatLevel <= 0 && icpLevel <= 0) return;
+        if (yeatLevel <= 0) return;
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return;
         build();
@@ -165,7 +170,6 @@ public final class ArtistEggs extends ClientModule {
         float time = (System.nanoTime() % 3_600_000_000_000L) / 1.0E9F;
         List<Placed> list = new ArrayList<>();
         if (yeatLevel > 0) yeatScene(list, time, distance);
-        if (icpLevel > 0) icpScene(list, time, distance);
         // far ones first so nearer ones draw over them
         list.sort((a, b) -> Float.compare(b.dist, a.dist));
         WorldQuads quads = WorldQuads.layer(false);
@@ -264,40 +268,88 @@ public final class ArtistEggs extends ClientModule {
         return ring;
     }
 
-    // Insane Clown Posse: clown faces, hatchet men, spinning hatchets, tumbling Faygo bottles
-    private void icpScene(List<Placed> list, float time, float distance) {
-        float level = HolidayEase.smooth(icpLevel);
-        float amt = amount.get();
-        int count = (int) (26 * amt);
+    // ---------------------------------------------------------------- Insane Clown Posse: your pictures floating in the sky
+
+    /** hatchet man logo, Riddle Box clown, the wraith, the two masks */
+    private static final Identifier[] ICP_IMAGES = {
+            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_hatchetman.png"),
+            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_clown.png"),
+            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_wraith.png"),
+            Identifier.fromNamespaceAndPath("exav-addon", "textures/sky/icp_masks.png"),
+    };
+
+    /** Called from the world render (camera-relative pose): draws the floating ICP pictures. */
+    public static void submitImages(PoseStack pose, SubmitNodeCollector collector) {
+        ArtistEggs m = active;
+        if (m == null || m.icpLevel <= 0) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return;
+        float level = HolidayEase.smooth(m.icpLevel);
+        // closer than the Yeat bells so they stay out of the fog
+        float distance = Math.max(40.0F, Math.min(120.0F, mc.options.getEffectiveRenderDistance() * 16 * 0.5F));
+        float time = (System.nanoTime() % 3_600_000_000_000L) / 1.0E9F;
+        int count = (int) (24 * m.amount.get());
+        List<float[]>[] perImage = new List[ICP_IMAGES.length];
+        for (int k = 0; k < perImage.length; k++) perImage[k] = new ArrayList<>();
         for (int i = 0; i < count; i++) {
-            int kind = i % 4;
+            int kind = i % ICP_IMAGES.length;
             float speed = (i % 2 == 0 ? 1 : -1) * (0.012F + 0.008F * (i % 5));
             float az = i * 2.39996F + time * speed;
             float el = (float) Math.toRadians(10 + (i * 41 % 50) + 4 * Math.sin(time * 0.4F + i * 0.9F));
             float dist = distance * (0.85F + 0.15F * ((i * 13) % 7) / 7.0F);
-            float size = dist * 0.014F * level * (0.8F + 0.4F * ((i * 7) % 5) / 5.0F);
-            Quaternionf local;
-            SmoothMesh mesh;
+            float size = dist * 0.17F * level * (0.8F + 0.4F * ((i * 7) % 5) / 5.0F);
+            float roll, bob;
             switch (kind) {
-                case 0 -> { // clown face, looking at you and swaying
-                    mesh = faces[i / 4 % faces.length];
-                    local = new Quaternionf().rotationY((float) Math.toRadians(25 * Math.sin(time * 0.7F + i))).rotateZ((float) Math.toRadians(8 * Math.sin(time * 0.9F + i)));
+                case 0 -> { // hatchet man: running bounce
+                    roll = 8 * (float) Math.sin(time * 6 + i);
+                    bob = 0.04F * Math.abs((float) Math.sin(time * 6 + i));
                 }
-                case 1 -> { // hatchet man running in place, bobbing
-                    mesh = hatchetMan;
-                    local = new Quaternionf().rotationZ((float) Math.toRadians(6 * Math.sin(time * 6 + i)));
-                    size *= 1.1F;
+                case 1 -> { // clown: rocking side to side, grinning at you
+                    roll = 14 * (float) Math.sin(time * 1.1F + i);
+                    bob = 0.02F * (float) Math.sin(time * 0.9F + i);
                 }
-                case 2 -> { // hatchet spinning end over end
-                    mesh = hatchet;
-                    local = new Quaternionf().rotationZ(time * 2.2F + i).rotateY(time * 0.6F);
+                case 2 -> { // wraith: slow eerie float up and down
+                    roll = 4 * (float) Math.sin(time * 0.5F + i);
+                    bob = 0.08F * (float) Math.sin(time * 0.6F + i);
                 }
-                default -> { // Faygo bottle tumbling
-                    mesh = faygos[i / 4 % faygos.length];
-                    local = new Quaternionf().rotationX(time * 0.9F + i).rotateZ(time * 0.6F + i * 0.5F);
+                default -> { // masks: swaying
+                    roll = 10 * (float) Math.sin(time * 0.8F + i * 1.3F);
+                    bob = 0.03F * (float) Math.sin(time * 1.2F + i);
                 }
             }
-            list.add(new Placed(mesh, direction(az, el), dist, local, size, 0xFF2030, 0, 1));
+            Vector3f dir = direction(az, el);
+            Vector3f centre = new Vector3f(dir).mul(dist).add(0, bob * size * 4, 0);
+            perImage[kind].add(new float[]{centre.x, centre.y, centre.z, size, (float) Math.toRadians(roll), dist});
+        }
+        int alpha = (int) (255 * level);
+        for (int k = 0; k < ICP_IMAGES.length; k++) {
+            List<float[]> items = perImage[k];
+            if (items.isEmpty()) continue;
+            items.sort((a, b) -> Float.compare(b[5], a[5])); // far first
+            collector.submitCustomGeometry(pose, RenderTypes.entityTranslucent(ICP_IMAGES[k]), (p, out) -> {
+                for (float[] it : items) billboard(p, out, it[0], it[1], it[2], it[3] / 2, it[4], alpha);
+            });
+        }
+    }
+
+    /** a square picture centred at (x,y,z) relative to the camera, facing the camera, turned by roll */
+    private static void billboard(PoseStack.Pose p, VertexConsumer out, float x, float y, float z, float half, float roll, int alpha) {
+        Vector3f back = new Vector3f(-x, -y, -z).normalize();
+        Vector3f right = new Vector3f(0, 1, 0).cross(back);
+        if (right.lengthSquared() < 1e-6F) right.set(1, 0, 0);
+        right.normalize();
+        Vector3f up = new Vector3f(back).cross(right).normalize();
+        float c = (float) Math.cos(roll), s = (float) Math.sin(roll);
+        Vector3f r = new Vector3f(right).mul(c).fma(s, up).mul(half);
+        Vector3f u = new Vector3f(up).mul(c).fma(-s, right).mul(half);
+        float[][] corners = {{-1, -1, 0, 1}, {1, -1, 1, 1}, {1, 1, 1, 0}, {-1, 1, 0, 0}};
+        for (float[] k : corners) {
+            out.addVertex(p, x + r.x * k[0] + u.x * k[1], y + r.y * k[0] + u.y * k[1], z + r.z * k[0] + u.z * k[1])
+                    .setColor(255, 255, 255, alpha)
+                    .setUv(k[2], k[3])
+                    .setOverlay(OverlayTexture.NO_OVERLAY)
+                    .setLight(0xF000F0)
+                    .setNormal(p, back.x, back.y, back.z);
         }
     }
 
@@ -370,11 +422,6 @@ public final class ArtistEggs extends ClientModule {
         if (bell != null) return;
         bell = SkyArt.bell();
         greenSparkle = SkyArt.sparkle(0x7CFFA0);
-        hatchetMan = SkyArt.hatchetMan();
-        hatchet = SkyArt.hatchet();
-        faces = new SmoothMesh[]{SkyArt.clownFace(0), SkyArt.clownFace(1), SkyArt.clownFace(2)};
-        faygos = new SmoothMesh[SkyArt.FAYGO_COLORS.length];
-        for (int i = 0; i < faygos.length; i++) faygos[i] = SkyArt.faygo(SkyArt.FAYGO_COLORS[i]);
     }
 
     /** tiny easing helper */

@@ -6,6 +6,7 @@
     "FogRendererTintMixin",
     "ItemInHandRendererMixin",
     "LevelRendererEndSkyMixin",
+    "LevelRendererSkyImagesMixin",
     "LocalPlayerMixin",
     "MultiPlayerGameModeMixin",
     "SkyRendererTintMixin"
