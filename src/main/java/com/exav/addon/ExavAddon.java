@@ -1,5 +1,6 @@
 package com.exav.addon;
 
+import com.exav.addon.modules.ArtistEggs;
 import com.exav.addon.modules.BaseFinder;
 import com.exav.addon.modules.DroppedItems;
 import com.exav.addon.modules.EndSkyLyrics;
@@ -29,6 +30,7 @@ public final class ExavAddon extends AnubisAddon {
         ModuleRegistry.add(new DroppedItems());
         ModuleRegistry.add(new HolidayKnife());
         ModuleRegistry.add(new EndSkyLyrics());
+        ModuleRegistry.add(new ArtistEggs());
     }
 
     @Override

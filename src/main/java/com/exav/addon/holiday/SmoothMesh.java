@@ -50,6 +50,25 @@ public final class SmoothMesh {
         }
     }
 
+    /** number of quads (4 corners each) */
+    public int quads() {
+        return quads;
+    }
+
+    /** corner positions (x, y, z per corner, 4 corners per quad) */
+    public float[] positions() {
+        return pos;
+    }
+
+    public float[] normals() {
+        return normal;
+    }
+
+    /** ARGB per corner */
+    public int[] colors() {
+        return color;
+    }
+
     /** One corner: position, normal, colour (RGB). */
     public record V(float x, float y, float z, float nx, float ny, float nz, int rgb) {
         public static V of(Vector3f p, Vector3f n, int rgb) {

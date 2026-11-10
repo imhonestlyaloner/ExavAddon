@@ -3,10 +3,12 @@
   "package": "com.exav.addon.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "FogRendererTintMixin",
     "ItemInHandRendererMixin",
     "LevelRendererEndSkyMixin",
     "LocalPlayerMixin",
-    "MultiPlayerGameModeMixin"
+    "MultiPlayerGameModeMixin",
+    "SkyRendererTintMixin"
   ],
   "injectors": {
     "defaultRequire": 1
