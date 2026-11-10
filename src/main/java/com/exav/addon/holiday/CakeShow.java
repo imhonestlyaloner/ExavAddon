@@ -6,10 +6,7 @@ import imgui.ImColor;
 import imgui.ImDrawList;
 import java.util.List;
 import java.util.Random;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
 import net.minecraft.client.renderer.SubmitNodeCollector;
-import net.minecraft.network.chat.Component;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.OverlayTexture;
@@ -31,15 +28,14 @@ public final class CakeShow {
     /** where the cake is held up during the show (grip point) and how it's tilted (top toward you a bit) */
     public static final Vector3f SHOW = new Vector3f(-0.47F, 0.0F, -0.24F);
     public static final Quaternionf SHOW_ROT = new Quaternionf().rotationX((float) Math.toRadians(16));
-    private static final Vector3f TEXT_CENTRE = new Vector3f(-0.54F, 0.9F, -0.44F);
     private static final Vector3f IMAGE_CENTRE = new Vector3f(-0.53F, 0.52F, -0.36F);
     private static final float IMAGE_BASE = 0.34F;
 
     public static final Identifier IMAGE = Identifier.fromNamespaceAndPath("exav-addon", "textures/misc/birthday_hat.png");
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
 
-    public record Config(String text, float textSize, float textOpacity, float opacity, float size, int density, float flutter,
-                         String palette, boolean showImage, float imageSize, float imageOpacity, boolean splat) {
+    public record Config(float opacity, float size, int density, float flutter, String palette,
+                         boolean showImage, float imageSize, float imageOpacity, boolean splat, boolean sparklers, float sparkAmount) {
     }
 
     private static final int[][] PALETTES = {
@@ -106,7 +102,7 @@ public final class CakeShow {
         Vector3f cakeTop = HolidayAnimation.pointOf(SHOW, SHOW_ROT, scale, skin, 0, HolidayModels.CAKE_TOP_Y, 0);
         Vector3f cakeMid = HolidayAnimation.pointOf(SHOW, SHOW_ROT, scale, skin, 0, 4.0F, 0);
         layout(cfg, cakeTop);
-        text(pose, collector, t, cfg);
+        if (cfg.sparklers() && t >= POP && t < BOOM) sparklers(pose, collector, t, cfg, frame(t, size), scale, light);
         RenderType translucent = RenderTypes.entityTranslucent(WHITE);
         int bright = 0xF000F0;
 
@@ -247,58 +243,123 @@ public final class CakeShow {
         }
     }
 
-    // ------------------------------------------------------------------ the message, in plain Minecraft text
+    // ------------------------------------------------------------------ sparklers
 
-    private static void text(PoseStack pose, SubmitNodeCollector collector, float t, Config cfg) {
-        if (t < POP || t > BOOM + 1.0F || cfg.text().isBlank()) return;
-        Font font = Minecraft.getInstance().font;
-        List<String> lines = wrap(cfg.text(), 22);
-        int widest = 1;
-        for (String l : lines) widest = Math.max(widest, font.width(l));
-        // fit the widest line into about 1.1 blocks, then apply the size setting
-        float px = Math.min(0.011F, 1.1F / widest) * cfg.textSize();
-        float pop = backOut(Math.min(1.0F, (t - POP - 0.1F) / 0.4F));
-        if (pop <= 0.001F) return;
-        float alpha = cfg.textOpacity();
-        Vector3f c = new Vector3f(TEXT_CENTRE).add(0, 0.01F * (float) Math.sin(t * 2.0F + 1.0F), 0);
-        float tilt = 0;
-        if (t > BOOM) { // blown up and away
-            float b = t - BOOM;
-            c.add(-0.15F * b, 0.8F * b - 0.5F * b * b, -0.15F * b);
-            tilt = b * 140.0F;
-            alpha *= 1.0F - HolidayAnimation.smooth(b / 1.0F);
-        }
-        int a = (int) (Math.max(0, Math.min(1, alpha)) * 255);
-        if (a < 5) return;
-        float s = px * pop;
-        pose.pushPose();
-        pose.translate(c.x, c.y, c.z);
-        pose.mulPose(new Quaternionf().rotationZ((float) Math.toRadians(tilt)));
-        pose.scale(s, -s, s); // text draws y-down
-        float lineH = 10;
-        float top = -(lines.size() * lineH - 1) / 2.0F;
-        for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i);
-            collector.submitText(pose, -font.width(line) / 2.0F, top + i * lineH, Component.literal(line).getVisualOrderText(),
-                    true, Font.DisplayMode.NORMAL, 0xF000F0, (a << 24) | 0xFFFFFF, 0, 0);
-        }
-        pose.popPose();
+    /** base (x, z) on the top tier and lean direction (x, z) of each sparkler, in cake model units */
+    private static final float[][] SPARKLERS = {{2.9F, -1.4F, 0.35F, -0.15F}, {-2.8F, -0.9F, -0.35F, -0.1F}, {0.6F, 2.9F, 0.05F, 0.3F}};
+    private static final float SPARKLER_LEN = 10.0F, COAT_FROM = 3.5F;
+    private static SmoothMesh wire, coat, glow;
+
+    private static void sparklerMeshes() {
+        if (wire != null) return;
+        SmoothMesh.Builder w = new SmoothMesh.Builder();
+        Shapes.tube(w, List.of(new Vector3f(0, -1.5F, 0), new Vector3f(0, SPARKLER_LEN, 0)), s -> 0.13F, (s, a) -> 0x9E9E9E, 6);
+        wire = w.build();
+        // the grey coating that burns, built one unit long so it can be stretched to however much is left
+        SmoothMesh.Builder c = new SmoothMesh.Builder();
+        Shapes.tube(c, List.of(new Vector3f(0, 0, 0), new Vector3f(0, 1, 0)), s -> 0.32F, (s, a) -> 0x5D5A57, 8);
+        coat = c.build();
+        SmoothMesh.Builder g = new SmoothMesh.Builder();
+        Shapes.sphere(g, 0, 0, 0, 1.0F, 0xFFFFFF, 6);
+        glow = g.build();
     }
 
-    /** splits on spaces into lines of at most maxChars, keeping the text's own capitals */
-    private static List<String> wrap(String text, int maxChars) {
-        List<String> lines = new java.util.ArrayList<>();
-        StringBuilder line = new StringBuilder();
-        for (String word : text.trim().split("\\s+")) {
-            if (line.length() > 0 && line.length() + 1 + word.length() > maxChars) {
-                lines.add(line.toString());
-                line.setLength(0);
-            }
-            if (line.length() > 0) line.append(' ');
-            line.append(word);
+    /** sparkler i's direction (unit, cake model space) */
+    private static Vector3f sparklerDir(int i) {
+        return new Vector3f(SPARKLERS[i][2], 1.0F, SPARKLERS[i][3]).normalize();
+    }
+
+    private static void sparklers(PoseStack pose, SubmitNodeCollector collector, float t, Config cfg, HolidayAnimation.Frame f, float scale, int light) {
+        sparklerMeshes();
+        HolidayAnimation.Skin skin = HolidayAnimation.Skin.BIRTHDAY_CAKE;
+        float since = t - POP;
+        float rise = HolidayAnimation.smooth(since / 0.25F);                 // they poke up out of the cake
+        float burnt = HolidayAnimation.smooth(since / (BOOM - POP));          // the coating burns down
+        float coatTop = SPARKLER_LEN - (SPARKLER_LEN - COAT_FROM) * 0.85F * burnt;
+        int bright = 0xF000F0;
+        Vector3f[] tips = new Vector3f[SPARKLERS.length];
+        pose.pushPose();
+        pose.translate(f.item.x, f.item.y, f.item.z);
+        pose.mulPose(f.rotation);
+        pose.scale(scale, scale, scale);
+        pose.translate(-skin.gripX, -skin.gripY, -skin.gripZ);
+        for (int i = 0; i < SPARKLERS.length; i++) {
+            Vector3f dir = sparklerDir(i);
+            pose.pushPose();
+            pose.translate(SPARKLERS[i][0], HolidayModels.CAKE_TOP_Y - 3.0F * (1 - rise), SPARKLERS[i][1]);
+            pose.mulPose(new Quaternionf().rotationTo(0, 1, 0, dir.x, dir.y, dir.z));
+            collector.submitCustomGeometry(pose, RenderTypes.entityCutoutNoCull(WHITE), (p, out) -> wire.emit(p, out, light));
+            pose.pushPose();
+            pose.translate(0, COAT_FROM, 0);
+            pose.scale(1, coatTop - COAT_FROM, 1);
+            collector.submitCustomGeometry(pose, RenderTypes.entityCutoutNoCull(WHITE), (p, out) -> coat.emit(p, out, light));
+            pose.popPose();
+            // white-hot burning point
+            pose.pushPose();
+            pose.translate(0, coatTop, 0);
+            float g = 0.55F + 0.15F * (float) Math.sin(t * 60 + i * 3);
+            pose.scale(g, g, g);
+            collector.submitCustomGeometry(pose, RenderTypes.entityTranslucent(WHITE), (p, out) -> glow.emit(p, out, bright, 0xFFFFF4C0));
+            pose.scale(1.9F, 1.9F, 1.9F);
+            collector.submitCustomGeometry(pose, RenderTypes.entityTranslucent(WHITE), (p, out) -> glow.emit(p, out, bright, 0x70FFB040));
+            pose.popPose();
+            pose.popPose();
+            tips[i] = HolidayAnimation.pointOf(f.item, f.rotation, scale, skin,
+                    SPARKLERS[i][0] + dir.x * coatTop, HolidayModels.CAKE_TOP_Y - 3.0F * (1 - rise) + dir.y * coatTop, SPARKLERS[i][1] + dir.z * coatTop);
         }
-        if (line.length() > 0) lines.add(line.toString());
-        return lines;
+        pose.popPose();
+        if (rise > 0.6F) {
+            collector.submitCustomGeometry(pose, RenderTypes.entityTranslucent(WHITE), (p, out) -> sparks(p, out, t, tips, cfg.sparkAmount()));
+        }
+    }
+
+    /**
+     * Sparks shooting out of the burning points: each one is a short glowing streak that flies off in a random
+     * direction, curves down under gravity and fades from white-yellow to orange. Worked out from the time alone,
+     * so no state is kept between frames.
+     */
+    private static void sparks(PoseStack.Pose p, VertexConsumer out, float t, Vector3f[] tips, float amount) {
+        float rate = 140.0F * amount; // sparks per second per sparkler
+        float maxLife = 0.6F;
+        int bright = 0xF000F0;
+        Vector3f pos = new Vector3f(), tail = new Vector3f(), side = new Vector3f(), dir = new Vector3f();
+        Vector3f toCam = new Vector3f();
+        for (int s = 0; s < tips.length; s++) {
+            int first = (int) Math.max(0, Math.floor((t - POP - maxLife) * rate));
+            int last = (int) Math.floor((t - POP) * rate);
+            for (int j = first; j <= last; j++) {
+                long seed = j * 7919L + s * 104729L;
+                float born = POP + j / rate;
+                float life = 0.25F + 0.35F * hash(seed, 1);
+                float age = t - born;
+                if (age < 0 || age > life) continue;
+                // random direction, mostly outward and up
+                float theta = hash(seed, 2) * 6.2832F, upish = hash(seed, 3) * 1.6F - 0.5F;
+                dir.set((float) Math.cos(theta), upish, (float) Math.sin(theta)).normalize();
+                float speed = 0.55F + 0.75F * hash(seed, 4);
+                pos.set(tips[s]).fma(speed * age, dir).add(0, -1.1F * age * age, 0);
+                // the streak points back along its motion
+                tail.set(dir).mul(speed).add(0, -2.2F * age, 0).normalize().mul(-0.025F - 0.02F * hash(seed, 5)).add(pos);
+                toCam.set(CAMERA).sub(pos).normalize();
+                side.set(tail).sub(pos).cross(toCam).normalize().mul(0.0028F);
+                float u = age / life;
+                int a = (int) (255 * (1 - u * u));
+                int r = 255, g = (int) (250 - 120 * u), b = (int) (210 - 190 * Math.min(1, u * 1.5F));
+                v(out, p, new Vector3f(pos).add(side), toCam, r, g, b, a, bright);
+                v(out, p, new Vector3f(pos).sub(side), toCam, r, g, b, a, bright);
+                v(out, p, new Vector3f(tail).sub(side), toCam, r, g, b, 0, bright);
+                v(out, p, new Vector3f(tail).add(side), toCam, r, g, b, 0, bright);
+            }
+        }
+    }
+
+    /** a repeatable random number 0..1 for spark j's property k */
+    private static float hash(long seed, int k) {
+        long h = seed * 0x9E3779B97F4A7C15L + k * 0xC2B2AE3D27D4EB4FL;
+        h ^= h >>> 31;
+        h *= 0xBF58476D1CE4E5B9L;
+        h ^= h >>> 29;
+        return (h >>> 40) / (float) (1L << 24);
     }
 
     // ------------------------------------------------------------------ confetti: bursts out of the cake and flutters down
