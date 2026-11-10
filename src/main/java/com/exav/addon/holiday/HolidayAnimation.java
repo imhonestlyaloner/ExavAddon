@@ -10,15 +10,18 @@ import org.joml.Vector3f;
  * x right, y up, z toward the camera; the camera sits at about (-0.56, 0.52, 0.72)).
  */
 public final class HolidayAnimation {
+    /** the gingerbread man's waving arm hanging down and out when he isn't waving */
+    static final float REST_UPPER = -40.0F, REST_FORE = -10.0F;
+
     /** where the fist rests */
     public static final Vector3f FIST = new Vector3f(-0.06F, 0.06F, 0.02F);
     /** just below the middle of the screen, a little in front of the camera */
     public static final Vector3f MOUTH = new Vector3f(-0.52F, 0.41F, 0.30F);
 
     public enum Skin {
-        CANDY_CANE("Candy Cane", 3.4F, 0.02F, HolidayModels.CANE_GRIP_X, HolidayModels.CANE_GRIP_Y, 0.5F),
-        HOT_COCOA("Hot Cocoa", 5.0F, 0.024F, HolidayModels.MUG_GRIP_X, HolidayModels.MUG_GRIP_Y, 0.5F),
-        GINGERBREAD("Gingerbread Man", 4.6F, 0.022F, HolidayModels.GINGER_GRIP_X, HolidayModels.GINGER_GRIP_Y, 1.0F);
+        CANDY_CANE("Candy Cane", 3.4F, 0.021F, HolidayModels.CANE_GRIP_X, HolidayModels.CANE_GRIP_Y, 0.0F),
+        HOT_COCOA("Hot Cocoa", 5.0F, 0.024F, HolidayModels.MUG_GRIP_X, HolidayModels.MUG_GRIP_Y, 0.0F),
+        GINGERBREAD("Gingerbread Man", 4.6F, 0.022F, HolidayModels.GINGER_GRIP_X, HolidayModels.GINGER_GRIP_Y, 0.0F);
 
         public final String label;
         public final float seconds;
@@ -69,8 +72,8 @@ public final class HolidayAnimation {
         public final Vector3f item = new Vector3f();
         public final Quaternionf rotation = new Quaternionf();
         public boolean bitten;
-        /** gingerbread waving arm angle, degrees */
-        public float wave;
+        /** gingerbread waving arm: shoulder and elbow angles, degrees (0 = straight out sideways) */
+        public float upperArm = REST_UPPER, foreArm = REST_FORE;
         /** marshmallows already in the mug */
         public int caught;
         public final List<Falling> falling = new ArrayList<>();
@@ -110,7 +113,7 @@ public final class HolidayAnimation {
         Vector3f ready = new Vector3f(FIST).add(0.0F, 0.03F, 0.0F);
         // "biting" pose: the straight part points at your mouth
         Quaternionf biteRot = new Quaternionf().rotationTo(0, 1, 0, -0.6F, 0.6F, 0.52F);
-        Vector3f biteGrip = gripFor(MOUTH, biteRot, scale, skin, HolidayModels.CANE_TIP_X, HolidayModels.CANE_TIP_Y - 1.0F);
+        Vector3f biteGrip = gripFor(MOUTH, biteRot, scale, skin, HolidayModels.CANE_BITE_X, HolidayModels.CANE_BITE_Y);
 
         if (t < 0.25F) { // wind up
             float u = smooth(t / 0.25F);
@@ -121,7 +124,7 @@ public final class HolidayAnimation {
             float u = (t - 0.25F) / 0.9F;
             f.hand.set(dip).lerp(ready, smooth(Math.min(1.0F, u / 0.8F)));
             // the middle of the cane flies in an arc and it spins around its middle
-            float midX = 2.0F, midY = 14.0F;
+            float midX = 2.0F, midY = 11.0F;
             Vector3f from = pointOf(dip, rest, scale, skin, midX, midY, skin.gripZ);
             Vector3f to = pointOf(ready, rest, scale, skin, midX, midY, skin.gripZ);
             Vector3f mid = new Vector3f(from).lerp(to, u).add(0.0F, 0.36F * 4.0F * u * (1.0F - u), 0.0F);
@@ -152,7 +155,7 @@ public final class HolidayAnimation {
             f.rotation.set(biteRot).slerp(rest, u);
             f.bitten = true;
         }
-        if (t >= 2.1F) crumbs(f, t - 2.1F, MOUTH, new int[]{HolidayModels.CRUMB_CANE, HolidayModels.CRUMB_CANE_2}, 7);
+        if (t >= 2.1F) crumbs(f, t - 2.1F, MOUTH, new int[]{HolidayModels.RED, HolidayModels.WHITE}, 7);
         return f;
     }
 
@@ -177,7 +180,7 @@ public final class HolidayAnimation {
         Vector3f up = new Vector3f(FIST).add(-0.12F, 0.12F, -0.08F);
         // drinking pose: tipped toward you, near rim at your mouth
         Quaternionf sipRot = new Quaternionf().rotationX((float) Math.toRadians(50)).mul(rest);
-        Vector3f sipGrip = gripFor(MOUTH, sipRot, scale, skin, 0.0F, HolidayModels.MUG_RIM_Y, 5.5F);
+        Vector3f sipGrip = gripFor(MOUTH, sipRot, scale, skin, 0.0F, HolidayModels.MUG_RIM_Y, HolidayModels.MUG_RIM_R);
 
         f.rotation.set(rest);
         if (t < 0.5F) { // lift it up
@@ -197,7 +200,7 @@ public final class HolidayAnimation {
             float u = (t - 4.0F) / 0.45F;
             float extra = (float) Math.toRadians(14) * (float) Math.sin(Math.PI * u);
             f.rotation.set(new Quaternionf().rotationX(extra).mul(sipRot));
-            f.hand.set(gripFor(MOUTH, f.rotation, scale, skin, 0.0F, HolidayModels.MUG_RIM_Y, 5.5F));
+            f.hand.set(gripFor(MOUTH, f.rotation, scale, skin, 0.0F, HolidayModels.MUG_RIM_Y, HolidayModels.MUG_RIM_R));
         } else { // back down
             float u = smooth(Math.min(1.0F, (t - 4.45F) / 0.55F));
             f.hand.set(sipGrip).lerp(FIST, u);
@@ -213,7 +216,7 @@ public final class HolidayAnimation {
             } else if (t >= m[0]) {
                 // falls onto the cocoa where the mug will be when it lands
                 Vector3f mugAt = catchPosition(up, land);
-                Vector3f surface = pointOf(mugAt, rest, scale, skin, MALLOW_SLOTS[i][0], HolidayModels.MUG_SURFACE_Y + 1.5F, MALLOW_SLOTS[i][1] + 0.5F);
+                Vector3f surface = pointOf(mugAt, rest, scale, skin, MALLOW_SLOTS[i][0], HolidayModels.MUG_SURFACE_Y + 0.9F, MALLOW_SLOTS[i][1]);
                 float u = (t - m[0]) / FALL;
                 Vector3f pos = new Vector3f(surface).add(0.02F * (1 - u), 1.1F * (1.0F - u * u), 0.0F);
                 f.falling.add(new Falling(pos, u * 540.0F + i * 70.0F));
@@ -247,23 +250,29 @@ public final class HolidayAnimation {
         Vector3f show = new Vector3f(-0.46F, 0.18F, -0.12F);
         Quaternionf showRot = new Quaternionf().rotationZ((float) Math.toRadians(-3));
         Quaternionf biteRot = new Quaternionf().rotationX((float) Math.toRadians(28)).rotateY((float) Math.toRadians(-25));
-        Vector3f biteGrip = gripFor(MOUTH, biteRot, scale, skin, 3.0F, 22.0F, 1.0F);
+        Vector3f biteGrip = gripFor(MOUTH, biteRot, scale, skin, HolidayModels.GINGER_BITE_X, HolidayModels.GINGER_BITE_Y, 0.0F);
 
         if (t < 0.5F) { // lift him up in front of you
             float u = smooth(t / 0.5F);
             f.hand.set(FIST).lerp(show, u);
             f.rotation.set(rest).slerp(showRot, u);
-        } else if (t < 2.25F) { // he waves (with a little hop)
+        } else if (t < 2.25F) { // he waves like a person: arm up, elbow bent, hand swaying from the elbow
             float u = t - 0.5F;
-            float envelope = smooth(Math.min(1.0F, u / 0.25F)) * smooth(Math.min(1.0F, (1.75F - u) / 0.25F));
-            f.wave = 15.0F + 40.0F * (float) Math.sin(u * Math.PI * 2.0 * 2.0) * envelope;
-            f.hand.set(show).add(0.0F, 0.012F * Math.abs((float) Math.sin(u * Math.PI * 2.0)), 0.0F);
-            f.rotation.set(showRot);
+            float raise = smooth(Math.min(1.0F, u / 0.3F)) * smooth(Math.min(1.0F, (1.75F - u) / 0.35F));
+            float sway = (float) Math.sin(u * Math.PI * 2.0 * 1.7) * smooth(Math.min(1.0F, (u - 0.15F) / 0.25F))
+                    * smooth(Math.min(1.0F, (1.75F - u) / 0.4F));
+            float lag = (float) Math.sin(u * Math.PI * 2.0 * 1.7 - 0.9);
+            // shoulder: from hanging down to raised up and out, following the hand a little
+            f.upperArm = REST_UPPER + (55.0F - REST_UPPER) * raise + 7.0F * lag * raise;
+            // elbow: bent up, forearm swinging side to side
+            f.foreArm = REST_FORE + (55.0F - REST_FORE) * raise + 32.0F * sway;
+            // he leans into it a bit
+            f.hand.set(show).add(0.0F, 0.01F * Math.abs((float) Math.sin(u * Math.PI * 1.7)), 0.0F);
+            f.rotation.set(new Quaternionf(showRot).rotateZ((float) Math.toRadians(-3.0F * sway * raise)));
         } else if (t < 2.9F) { // to your mouth
             float u = smooth((t - 2.25F) / 0.65F);
             f.hand.set(show).lerp(biteGrip, u);
             f.rotation.set(showRot).slerp(biteRot, u);
-            f.wave = 15.0F * (1.0F - u);
         } else if (t < 3.75F) { // bite (chomp at ~3.0), chew
             float u = t - 2.9F;
             float chomp = u < 0.3F ? (float) Math.sin(Math.PI * u / 0.3F) : 0.0F;

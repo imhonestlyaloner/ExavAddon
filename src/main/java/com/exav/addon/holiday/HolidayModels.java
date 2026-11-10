@@ -1,227 +1,220 @@
 package com.exav.addon.holiday;
 
+import java.util.ArrayList;
+import java.util.List;
+import org.joml.Vector3f;
+
 /**
- * The voxel models. Each is built so the point the hand holds is at (gripX, gripY, 0); model +Y is "up the item"
- * and model +Z is its front (the side that faces you).
+ * The smooth models. Model units are about 1/45 of a block; +Y is "up the item", +Z is its front (toward you),
+ * and each model's grip point (where the hand holds it) is given by the constants below.
  */
 public final class HolidayModels {
     private HolidayModels() {
     }
 
     // ---------------------------------------------------------------- candy cane
-    // The hook is the handle: the hand holds the bottom of the curve, the straight part sticks out like a blade.
-    public static final float CANE_GRIP_X = 5.0F, CANE_GRIP_Y = -5.0F;
-    /** top end of the straight part, where the bite goes */
-    public static final float CANE_TIP_X = 0.0F, CANE_TIP_Y = 34.0F;
+    // Licked to a point at the top. The hand sits INSIDE the curve of the hook, so the hook wraps around
+    // the fist like a sword's hand guard and the straight part sticks out like the blade.
+    public static final float CANE_HOOK_R = 7.0F;
+    public static final float CANE_GRIP_X = CANE_HOOK_R, CANE_GRIP_Y = -1.5F;
+    /** where the bite goes (just below the licked point) */
+    public static final float CANE_BITE_X = 0.0F, CANE_BITE_Y = 27.0F;
+    private static final float CANE_R = 1.8F, CANE_TOP = 31.0F, LICK_FROM = 21.0F, BITE_CUT = 24.5F;
 
-    private static final int RED = 0xD31F2A, WHITE = 0xF6F3F0, MINT = 0x2E9E58;
+    public static final int RED = 0xD31F2A, WHITE = 0xF7F4F1, GREEN = 0x1F9A4E;
+    private static final int SUGAR = 0xF4E4E2;
 
-    private static VoxelMesh.Builder cane() {
-        VoxelMesh.Builder b = new VoxelMesh.Builder();
-        // centre line: hook (half circle radius 5 around (5,0), from (0,0) down through (5,-5) to (10,0)), short tail, shaft up to y=34
-        for (int x = -3; x <= 13; x++) {
-            for (int y = -8; y <= 35; y++) {
-                for (int z = -2; z <= 2; z++) {
-                    float cx = x + 0.5F, cy = y + 0.5F, cz = z + 0.5F;
-                    float[] near = nearestOnCane(cx, cy);
-                    float dx = cx - near[0], dy = cy - near[1];
-                    if (dx * dx + dy * dy + cz * cz > 1.75F * 1.75F) continue;
-                    // diagonal stripes: along the path plus a twist around it
-                    float along = near[2] + (dx + cz) * 0.9F;
-                    int band = Math.floorMod((int) Math.floor(along / 2.2F), 5);
-                    b.set(x, y, z, band == 0 || band == 1 ? RED : band == 3 ? MINT : WHITE);
-                }
-            }
+    /** The cane's centre line, from the end of the hook to the top, plus where the straight part starts. */
+    private static List<Vector3f> canePath(float top) {
+        List<Vector3f> p = new ArrayList<>();
+        float r = CANE_HOOK_R, tail = 2.5F;
+        for (float y = tail; y > 0.0F; y -= 0.3F) p.add(new Vector3f(2 * r, y, 0));
+        for (int i = 0; i <= 60; i++) { // half circle from (2r,0) down through (r,-r) to (0,0)
+            double a = Math.PI * 2 - Math.PI * i / 60.0;
+            p.add(new Vector3f(r + r * (float) Math.cos(a), r * (float) Math.sin(a), 0));
         }
-        return b;
+        for (float y = 0.3F; y < top; y += 0.3F) p.add(new Vector3f(0, y, 0));
+        p.add(new Vector3f(0, top, 0));
+        return p;
     }
 
-    /** nearest point on the cane's centre line and how far along it that is: {x, y, s} */
-    private static float[] nearestOnCane(float px, float py) {
-        float best = Float.MAX_VALUE, bx = 0, by = 0, bs = 0;
-        // hook: angle from pi (at (0,0)) to 2pi (at (10,0)), then tail (10,0)->(10,2)
-        float s = 0;
-        for (int i = 0; i <= 40; i++) {
-            double a = Math.PI + Math.PI * i / 40.0;
-            float x = 5 + 5 * (float) Math.cos(a), y = 5 * (float) Math.sin(a);
-            float d = (px - x) * (px - x) + (py - y) * (py - y);
-            if (d < best) {
-                best = d;
-                bx = x;
-                by = y;
-                bs = 15.7F - (float) (5 * Math.PI * i / 40.0); // count from the tail end so the shaft continues the pattern
+    /** distance along the path where the straight part starts */
+    private static final float SHAFT_START = 2.5F + (float) Math.PI * CANE_HOOK_R;
+
+    private static SmoothMesh cane(boolean redGreen, boolean bitten) {
+        float top = bitten ? BITE_CUT : CANE_TOP;
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.tube(b, canePath(top), s -> {
+            float r = CANE_R;
+            if (s < CANE_R) r *= (float) Math.sqrt(1 - Math.pow(1 - s / CANE_R, 2)); // rounded end of the hook
+            float y = s - SHAFT_START; // height up the straight part
+            if (y > LICK_FROM) {
+                // licked to a point: thins smoothly, a little lopsided like it's been licked on one side
+                float u = Math.min(1.0F, (y - LICK_FROM) / (CANE_TOP - LICK_FROM));
+                r *= (float) Math.pow(1 - u, 0.8);
             }
-        }
-        // tail
-        for (float y = 0; y <= 2; y += 0.25F) {
-            float d = (px - 10) * (px - 10) + (py - y) * (py - y);
-            if (d < best) {
-                best = d;
-                bx = 10;
-                by = y;
-                bs = -y;
-            }
-        }
-        // shaft (0,0) -> (0,34)
-        float y = Math.max(0, Math.min(34, py));
-        float d = px * px + (py - y) * (py - y);
-        if (d < best) {
-            bx = 0;
-            by = y;
-            bs = 15.7F + y;
-        }
-        return new float[]{bx, by, s + bs};
-    }
-
-    public static VoxelMesh caneWhole() {
-        return cane().build();
-    }
-
-    /** a bite out of the top: a few rows gone plus a jagged notch */
-    public static VoxelMesh caneBitten() {
-        return cane().carve((x, y, z) -> y >= 31 || (y >= 28 && x + z >= 0) || (y == 27 && x >= 1 && z >= 0)).build();
-    }
-
-    // ---------------------------------------------------------------- hot cocoa mug
-    public static final float MUG_GRIP_X = 8.5F, MUG_GRIP_Y = 5.0F;
-    /** centre of the cocoa surface, where marshmallows land */
-    public static final float MUG_SURFACE_Y = 9.0F;
-    public static final float MUG_RIM_Y = 11.0F;
-
-    private static final int MUG = 0xC62E2E, MUG_DARK = 0xA22424, BAND = 0xF4F1EA, COCOA = 0x5B3420, COCOA_FOAM = 0x8A5A3C;
-
-    public static VoxelMesh mug() {
-        VoxelMesh.Builder b = new VoxelMesh.Builder();
-        for (int x = -6; x <= 6; x++) {
-            for (int z = -6; z <= 6; z++) {
-                float cx = x + 0.5F, cz = z + 0.5F;
-                float r2 = cx * cx + cz * cz;
-                if (r2 > 5.6F * 5.6F) continue;
-                boolean wall = r2 > 4.3F * 4.3F;
-                for (int y = 0; y <= 10; y++) {
-                    if (wall || y <= 1) {
-                        int c = (y == 4 || y == 5) ? BAND : (y == 10 ? MUG_DARK : MUG);
-                        // little red dots on the white band, like a snowflake pattern
-                        if ((y == 4 || y == 5) && Math.floorMod(x * 3 + z * 5 + y, 7) == 0) c = MUG;
-                        b.set(x, y, z, c);
-                    } else if (y <= 8) {
-                        b.set(x, y, z, y == 8 ? (Math.floorMod(x * 7 + z * 3, 5) == 0 ? COCOA_FOAM : COCOA) : COCOA);
-                    }
-                }
-            }
-        }
-        // handle on +X: a ring around (7,5)
-        for (int x = 5; x <= 10; x++) {
-            for (int y = 1; y <= 9; y++) {
-                for (int z = -1; z <= 0; z++) {
-                    float dx = x + 0.5F - 7.0F, dy = y + 0.5F - 5.5F;
-                    float d = (float) Math.sqrt(dx * dx + dy * dy);
-                    if (d >= 2.0F && d <= 3.6F && x + 0.5F >= 5.6F) b.set(x, y, z, MUG);
-                }
+            return r;
+        }, (s, a) -> {
+            // spiral stripes
+            float phase = s / 5.5F + a / (float) (Math.PI * 2);
+            float f = phase - (float) Math.floor(phase);
+            if (redGreen) return f < 0.5F ? RED : GREEN;
+            return f < 0.4F ? RED : WHITE;
+        }, 20);
+        if (bitten) {
+            // the cut end: sugary inside with a ragged bite edge
+            for (int k = 0; k < 14; k++) {
+                double a = Math.PI * 2 * k / 14;
+                float jag = (k % 2 == 0) ? 0.5F : 0.0F;
+                float r = CANE_R * 0.6F;
+                Shapes.sphere(b, r * (float) Math.cos(a), top + jag, r * (float) Math.sin(a), 0.55F, SUGAR, 3);
             }
         }
         return b.build();
     }
 
-    private static final int MALLOW = 0xFFFAF2, MALLOW_SIDE = 0xF6E7E2;
+    public static SmoothMesh cane(boolean redGreen) {
+        return cane(redGreen, false);
+    }
 
-    /** a 3x3x3 marshmallow, centred on its own origin */
-    public static VoxelMesh marshmallow() {
-        VoxelMesh.Builder b = new VoxelMesh.Builder();
-        for (int x = -1; x <= 1; x++) {
-            for (int y = -1; y <= 1; y++) {
-                for (int z = -1; z <= 1; z++) {
-                    if (Math.abs(x) + Math.abs(y) + Math.abs(z) == 3) continue; // rounded corners
-                    b.set(x, y, z, y == 1 ? MALLOW : MALLOW_SIDE);
-                }
+    public static SmoothMesh caneBitten(boolean redGreen) {
+        return cane(redGreen, true);
+    }
+
+    // ---------------------------------------------------------------- hot cocoa mug
+    public static final float MUG_GRIP_X = 9.9F, MUG_GRIP_Y = 5.3F;
+    public static final float MUG_SURFACE_Y = 8.9F;
+    public static final float MUG_RIM_Y = 10.6F, MUG_RIM_R = 5.4F;
+
+    private static final int MUG = 0xC62E2E, MUG_DARK = 0x9E2222, BAND = 0xF4F1EA, COCOA = 0x5B3420, FOAM = 0x9A6A48;
+
+    public static SmoothMesh mug() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        // one profile from the middle of the bottom, up the outside, over the rounded rim, down the inside
+        float[][] profile = {{0, 0}, {4.8F, 0}, {5.45F, 0.25F}, {5.8F, 0.9F}, {5.8F, 3.6F}, {5.8F, 4.0F}, {5.8F, 6.0F},
+                {5.8F, 6.4F}, {5.8F, 9.6F}, {5.72F, 10.2F}, {5.45F, 10.55F}, {5.05F, 10.55F}, {4.85F, 10.2F},
+                {4.8F, 9.6F}, {4.8F, MUG_SURFACE_Y}};
+        Shapes.lathe(b, profile, 32, true, (y, a, i) -> {
+            if (i >= 9) return MUG_DARK;
+            if (y >= 4.0F && y <= 6.0F) {
+                // white band with little red dots
+                double dot = Math.cos(a * 10) * Math.cos((y - 5.0F) * 3.0F);
+                return dot > 0.75 ? MUG : BAND;
             }
+            return MUG;
+        });
+        // cocoa with a swirl of foam
+        Shapes.disc(b, MUG_SURFACE_Y, 4.8F, true, 32, 6, (x, z) -> {
+            double r = Math.sqrt(x * x + z * z), a = Math.atan2(z, x);
+            return Math.sin(a * 2 + r * 1.3) > 0.55 ? FOAM : COCOA;
+        });
+        // handle: a loop on the +X side
+        List<Vector3f> path = new ArrayList<>();
+        for (int i = 0; i <= 40; i++) {
+            double a = Math.toRadians(125 - 250.0 * i / 40);
+            path.add(new Vector3f(7.0F + 2.9F * (float) Math.cos(a), 5.3F + 2.9F * (float) Math.sin(a), 0));
         }
+        Shapes.tube(b, path, s -> 0.85F, (s, a) -> MUG, 12);
+        return b.build();
+    }
+
+    private static final int MALLOW = 0xFFFBF5, MALLOW_SIDE = 0xF7E8E4;
+
+    /** a soft cylinder marshmallow, centred on its own origin */
+    public static SmoothMesh marshmallow() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        float[][] profile = {{0, -1.1F}, {1.2F, -1.1F}, {1.45F, -0.85F}, {1.52F, 0}, {1.45F, 0.85F}, {1.2F, 1.1F}, {0, 1.1F}};
+        Shapes.lathe(b, profile, 14, true, (y, a, i) -> (i == 0 || i == 6 || i == 5) ? MALLOW : MALLOW_SIDE);
         return b.build();
     }
 
     // ---------------------------------------------------------------- gingerbread man
-    public static final float GINGER_GRIP_X = 0.0F, GINGER_GRIP_Y = 3.0F;
-    /** shoulder the waving arm turns around */
-    public static final float GINGER_SHOULDER_X = 4.0F, GINGER_SHOULDER_Y = 13.5F;
-    public static final float GINGER_HEAD_X = 0.0F, GINGER_HEAD_Y = 19.5F;
+    public static final float GINGER_GRIP_X = 0.0F, GINGER_GRIP_Y = 3.5F;
+    /** where the waving arm's shoulder is, how long the upper arm is */
+    public static final float GINGER_SHOULDER_X = 4.4F, GINGER_SHOULDER_Y = 13.6F, GINGER_UPPER_LEN = 4.0F;
+    public static final float GINGER_BITE_X = 3.0F, GINGER_BITE_Y = 22.5F;
 
-    private static final int COOKIE = 0xB86A2E, COOKIE_EDGE = 0x95511F, ICING = 0xFBF7F0, EYE = 0x2B1A10,
+    private static final int COOKIE = 0xC0712F, COOKIE_EDGE = 0x8E4B1C, ICING = 0xFBF7F0, EYE = 0x2B1A10,
             BUTTON_RED = 0xD32F2F, BUTTON_GREEN = 0x2E9E58;
+    private static final float THICK = 1.3F, PUFF = 2.2F, STEP = 0.28F;
 
-    private static VoxelMesh.Builder gingerBody() {
-        VoxelMesh.Builder b = new VoxelMesh.Builder();
-        for (int x = -10; x <= 10; x++) {
-            for (int y = 0; y <= 25; y++) {
-                if (!inBody(x + 0.5F, y + 0.5F)) continue;
-                boolean edge = !inBody(x + 1.5F, y + 0.5F) || !inBody(x - 0.5F, y + 0.5F)
-                        || !inBody(x + 0.5F, y + 1.5F) || !inBody(x + 0.5F, y - 0.5F);
-                b.set(x, y, 0, edge ? COOKIE_EDGE : COOKIE);
-                b.set(x, y, 1, edge ? COOKIE_EDGE : COOKIE);
-            }
-        }
-        // icing on the front (z = 2)
-        b.set(-2, 20, 2, EYE).set(1, 20, 2, EYE);                                // eyes
-        b.set(-2, 18, 2, ICING).set(-1, 17, 2, ICING).set(0, 17, 2, ICING).set(1, 18, 2, ICING); // smile
-        b.set(0, 12, 2, BUTTON_RED).set(0, 9, 2, BUTTON_GREEN).set(0, 6, 2, BUTTON_RED);         // buttons
-        for (int x = -5; x <= -2; x++) b.set(x, 2, 2, ICING);                                    // ankle icing
-        for (int x = 2; x <= 5; x++) b.set(x, 2, 2, ICING);
-        b.set(-8, 10, 2, ICING).set(-7, 11, 2, ICING);                                          // wrist icing (still arm)
-        return b;
+    private static float body(float x, float y) {
+        float d = Shapes.circle(x, y, 0, 19.6F, 5.0F);
+        d = Shapes.smin(d, Shapes.capsule(x, y, 0, 7.5F, 0, 13.5F, 4.5F), 1.4F);
+        d = Shapes.smin(d, Shapes.capsule(x, y, -2.4F, 6.5F, -3.6F, 1.4F, 2.3F), 1.2F);
+        d = Shapes.smin(d, Shapes.capsule(x, y, 2.4F, 6.5F, 3.6F, 1.4F, 2.3F), 1.2F);
+        d = Shapes.smin(d, Shapes.capsule(x, y, -3.5F, 13.2F, -8.4F, 9.6F, 2.0F), 1.2F); // the arm that stays still
+        d = Shapes.smin(d, Shapes.capsule(x, y, 3.0F, 13.2F, GINGER_SHOULDER_X, GINGER_SHOULDER_Y, 2.0F), 1.0F); // shoulder
+        return d;
     }
 
-    private static boolean inBody(float x, float y) {
-        // head
-        float hx = x - GINGER_HEAD_X, hy = y - GINGER_HEAD_Y;
-        if (hx * hx + hy * hy <= 4.6F * 4.6F) return true;
-        // torso
-        if (Math.abs(x) <= 4.2F && y >= 5 && y <= 16) return true;
-        // legs (rounded feet)
-        if (y >= 0 && y < 7 && Math.abs(x) >= 1.2F && Math.abs(x) <= 5.2F) return !(y < 1 && (Math.abs(x) < 1.8F || Math.abs(x) > 4.6F));
-        // left arm (the one that stays still), angled down-out
-        return distToSegment(x, y, -3.5F, 13.5F, -8.5F, 10.0F) <= 1.7F;
+    private static float bite(float x, float y) {
+        float d = Shapes.circle(x, y, 3.8F, 23.4F, 3.0F);
+        d = Math.min(d, Shapes.circle(x, y, 1.4F, 25.0F, 2.0F));
+        d = Math.min(d, Shapes.circle(x, y, 5.7F, 21.1F, 1.7F));
+        return d;
     }
 
-    public static VoxelMesh gingerWhole() {
-        return gingerBody().build();
+    private static int icing(float x, float y) {
+        if (Shapes.circle(x, y, -1.8F, 20.6F, 0.8F) < 0 || Shapes.circle(x, y, 1.8F, 20.6F, 0.8F) < 0) return EYE;
+        if (Math.abs(Shapes.circle(x, y, 0, 20.4F, 2.6F)) < 0.33F && y < 19.4F) return ICING;          // smile
+        if (Shapes.circle(x, y, 0, 13.0F, 0.85F) < 0 || Shapes.circle(x, y, 0, 7.4F, 0.85F) < 0) return BUTTON_RED;
+        if (Shapes.circle(x, y, 0, 10.2F, 0.85F) < 0) return BUTTON_GREEN;
+        if (Math.abs(x) > 1.2F && Math.abs(y - (2.6F + 0.35F * (float) Math.sin(x * 4))) < 0.28F) return ICING; // ankles
+        if (Math.abs(Shapes.circle(x, y, -8.4F, 9.6F, 1.5F)) < 0.28F && x > -9.2F) return ICING;     // wrist
+        return -1;
     }
 
-    /** a bite out of the head (top right) */
-    public static VoxelMesh gingerBitten() {
-        return gingerBody().carve((x, y, z) -> {
-            float dx = x + 0.5F - 3.6F, dy = y + 0.5F - 22.6F;
-            float dx2 = x + 0.5F - 1.2F, dy2 = y + 0.5F - 24.4F;
-            return dx * dx + dy * dy <= 3.3F * 3.3F || dx2 * dx2 + dy2 * dy2 <= 2.0F * 2.0F;
-        }).build();
-    }
-
-    /** the waving arm, built around its own shoulder pivot at (0,0); points up and out */
-    public static VoxelMesh gingerArm() {
-        VoxelMesh.Builder b = new VoxelMesh.Builder();
-        for (int x = -2; x <= 8; x++) {
-            for (int y = -2; y <= 8; y++) {
-                float d = distToSegment(x + 0.5F, y + 0.5F, -0.5F, 0.0F, 5.0F, 4.5F);
-                if (d > 1.7F) continue;
-                boolean edge = distToSegment(x + 0.5F, y + 0.5F, -0.5F, 0.0F, 5.0F, 4.5F) > 1.0F;
-                b.set(x, y, 0, edge ? COOKIE_EDGE : COOKIE);
-                b.set(x, y, 1, edge ? COOKIE_EDGE : COOKIE);
-            }
-        }
-        b.set(4, 3, 2, ICING).set(5, 4, 2, ICING); // wrist icing
+    private static SmoothMesh ginger(boolean bitten) {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.Field field = bitten ? (x, y) -> Math.max(body(x, y), -bite(x, y)) : HolidayModels::body;
+        Shapes.puffy(b, field, -11.5F, -0.5F, 11.5F, 25.5F, STEP, THICK, PUFF,
+                (x, y, depth) -> {
+                    int ice = icing(x, y);
+                    return ice >= 0 ? ice : cookie(depth);
+                },
+                (x, y, depth) -> cookie(depth),
+                (x, y) -> icing(x, y) >= 0 ? 0.25F : 0.0F);
         return b.build();
     }
 
-    private static float distToSegment(float px, float py, float ax, float ay, float bx, float by) {
-        float vx = bx - ax, vy = by - ay;
-        float t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)));
-        float dx = px - (ax + t * vx), dy = py - (ay + t * vy);
-        return (float) Math.sqrt(dx * dx + dy * dy);
+    private static int cookie(float depth) {
+        return Shapes.mix(COOKIE_EDGE, COOKIE, depth / 1.6F);
+    }
+
+    public static SmoothMesh gingerWhole() {
+        return ginger(false);
+    }
+
+    public static SmoothMesh gingerBitten() {
+        return ginger(true);
+    }
+
+    /** upper part of the waving arm, shoulder at (0,0), pointing along +X */
+    public static SmoothMesh gingerUpperArm() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.puffy(b, (x, y) -> Shapes.capsule(x, y, 0, 0, GINGER_UPPER_LEN, 0, 1.9F), -2.5F, -2.5F, 6.5F, 2.5F, STEP, THICK, PUFF,
+                (x, y, d) -> cookie(d), (x, y, d) -> cookie(d), null);
+        return b.build();
+    }
+
+    /** forearm and mitten hand of the waving arm, elbow at (0,0), pointing along +X */
+    public static SmoothMesh gingerForearm() {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.Field f = (x, y) -> Shapes.smin(Shapes.capsule(x, y, 0, 0, 3.2F, 0, 1.75F), Shapes.circle(x, y, 4.0F, 0, 2.0F), 1.0F);
+        Shapes.puffy(b, f, -2.5F, -2.8F, 6.6F, 2.8F, STEP, THICK, PUFF,
+                (x, y, d) -> Math.abs(Shapes.circle(x, y, 4.0F, 0, 1.55F)) < 0.28F && x < 3.9F ? ICING : cookie(d),
+                (x, y, d) -> cookie(d),
+                (x, y) -> Math.abs(Shapes.circle(x, y, 4.0F, 0, 1.55F)) < 0.28F && x < 3.9F ? 0.25F : 0.0F);
+        return b.build();
     }
 
     // ---------------------------------------------------------------- crumbs
-    /** a single crumb voxel, centred */
-    public static VoxelMesh crumb(int rgb) {
-        return new VoxelMesh.Builder().set(0, 0, 0, rgb).build();
+    public static SmoothMesh crumb(int rgb) {
+        SmoothMesh.Builder b = new SmoothMesh.Builder();
+        Shapes.sphere(b, 0, 0, 0, 0.6F, rgb, 4);
+        return b.build();
     }
 
-    public static final int CRUMB_CANE = RED, CRUMB_CANE_2 = WHITE, CRUMB_COOKIE = COOKIE;
+    public static final int CRUMB_COOKIE = COOKIE;
 }

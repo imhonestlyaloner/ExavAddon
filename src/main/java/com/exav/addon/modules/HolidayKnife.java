@@ -5,7 +5,7 @@ import com.exav.addon.holiday.HandArm;
 import com.exav.addon.holiday.HolidayAnimation;
 import com.exav.addon.holiday.HolidayAnimation.Skin;
 import com.exav.addon.holiday.HolidayModels;
-import com.exav.addon.holiday.VoxelMesh;
+import com.exav.addon.holiday.SmoothMesh;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
 import net.anubis.client.event.EventPriority;
@@ -43,6 +43,7 @@ public final class HolidayKnife extends ClientModule {
 
     private final ModeSetting skin = addSetting("skin", new ModeSetting("Knife Skin", Skin.CANDY_CANE.label,
             Skin.CANDY_CANE.label, Skin.HOT_COCOA.label, Skin.GINGERBREAD.label));
+    private final ModeSetting caneColors = addSetting("cane-colors", new ModeSetting("Cane Colors", "Red & White", "Red & White", "Red & Green"));
     private final KeySetting key = addSetting("key", new KeySetting("Inspect Key", 70)); // F
     private final NumberSetting speed = addSetting("speed", new NumberSetting("Speed", 1.0F, 0.5F, 2.0F).step(0.05F));
     private final NumberSetting size = addSetting("size", new NumberSetting("Knife Size", 1.0F, 0.5F, 2.0F).step(0.05F));
@@ -55,7 +56,8 @@ public final class HolidayKnife extends ClientModule {
     private int heldSlot = -1;
     private Item heldItem;
 
-    private static VoxelMesh caneWhole, caneBitten, mug, mallow, gingerWhole, gingerBitten, gingerArm, crumbRed, crumbWhite, crumbCookie;
+    private static SmoothMesh caneRW, caneRWBitten, caneRG, caneRGBitten, mug, mallow, gingerWhole, gingerBitten, gingerUpper, gingerFore,
+            crumbRed, crumbWhite, crumbGreen, crumbCookie;
 
     public HolidayKnife() {
         super("Holiday Knife", "Candy cane, hot cocoa or gingerbread man skins for your sword, each with its own inspect animation (F by default).", ExavAddon.CATEGORY);
@@ -146,7 +148,7 @@ public final class HolidayKnife extends ClientModule {
             f = HolidayAnimation.rest(current);
         }
 
-        RenderType type = RenderTypes.entitySolid(WHITE);
+        RenderType type = RenderTypes.entityCutoutNoCull(WHITE);
         float scale = current.voxel * knifeSize;
         pose.pushPose();
         if (left) pose.scale(-1.0F, 1.0F, 1.0F);
@@ -166,25 +168,32 @@ public final class HolidayKnife extends ClientModule {
         pose.scale(scale, scale, scale);
         pose.translate(-current.gripX, -current.gripY, -current.gripZ);
         switch (current) {
-            case CANDY_CANE -> submit(pose, collector, type, f.bitten ? caneBitten : caneWhole, light);
+            case CANDY_CANE -> {
+                boolean green = caneColors.is("Red & Green");
+                submit(pose, collector, type, green ? (f.bitten ? caneRGBitten : caneRG) : (f.bitten ? caneRWBitten : caneRW), light);
+            }
             case HOT_COCOA -> {
                 submit(pose, collector, type, mug, light);
                 for (int i = 0; i < f.caught && i < HolidayAnimation.MALLOW_SLOTS.length; i++) {
                     float[] slot = HolidayAnimation.MALLOW_SLOTS[i];
                     pose.pushPose();
-                    pose.translate(slot[0] + 0.5F, HolidayModels.MUG_SURFACE_Y + 1.0F, slot[1] + 0.5F);
+                    pose.translate(slot[0], HolidayModels.MUG_SURFACE_Y + 0.7F, slot[1]);
                     pose.mulPose(Axis.YP.rotationDegrees(i * 37.0F));
-                    pose.translate(-0.5F, -0.5F, -0.5F);
+                    pose.mulPose(Axis.XP.rotationDegrees(i % 2 == 0 ? 12.0F : -9.0F));
                     submit(pose, collector, type, mallow, light);
                     pose.popPose();
                 }
             }
             case GINGERBREAD -> {
                 submit(pose, collector, type, f.bitten ? gingerBitten : gingerWhole, light);
+                // waving arm: upper arm turns at the shoulder, forearm at the elbow
                 pose.pushPose();
                 pose.translate(HolidayModels.GINGER_SHOULDER_X, HolidayModels.GINGER_SHOULDER_Y, 0.0F);
-                pose.mulPose(Axis.ZP.rotationDegrees(f.wave));
-                submit(pose, collector, type, gingerArm, light);
+                pose.mulPose(Axis.ZP.rotationDegrees(f.upperArm));
+                submit(pose, collector, type, gingerUpper, light);
+                pose.translate(HolidayModels.GINGER_UPPER_LEN, 0.0F, 0.0F);
+                pose.mulPose(Axis.ZP.rotationDegrees(f.foreArm));
+                submit(pose, collector, type, gingerFore, light);
                 pose.popPose();
             }
         }
@@ -198,40 +207,42 @@ public final class HolidayKnife extends ClientModule {
             pose.mulPose(Axis.XP.rotationDegrees(m.spin()));
             pose.mulPose(Axis.ZP.rotationDegrees(m.spin() * 0.6F));
             pose.scale(mugScale, mugScale, mugScale);
-            pose.translate(-0.5F, -0.5F, -0.5F);
             submit(pose, collector, type, mallow, light);
             pose.popPose();
         }
 
         // crumbs from a bite
         for (HolidayAnimation.Crumb c : f.crumbs) {
-            VoxelMesh crumb = c.rgb() == HolidayModels.CRUMB_CANE ? crumbRed : c.rgb() == HolidayModels.CRUMB_CANE_2 ? crumbWhite : crumbCookie;
+            SmoothMesh crumb = c.rgb() == HolidayModels.RED ? crumbRed
+                    : c.rgb() == HolidayModels.WHITE ? (caneColors.is("Red & Green") ? crumbGreen : crumbWhite) : crumbCookie;
             pose.pushPose();
             pose.translate(c.pos().x, c.pos().y, c.pos().z);
-            float s = scale * 0.9F;
-            pose.scale(s, s, s);
-            pose.translate(-0.5F, -0.5F, -0.5F);
+            pose.scale(scale, scale, scale);
             submit(pose, collector, type, crumb, light);
             pose.popPose();
         }
         pose.popPose();
     }
 
-    private static void submit(PoseStack pose, SubmitNodeCollector collector, RenderType type, VoxelMesh mesh, int light) {
+    private static void submit(PoseStack pose, SubmitNodeCollector collector, RenderType type, SmoothMesh mesh, int light) {
         collector.submitCustomGeometry(pose, type, (p, out) -> mesh.emit(p, out, light));
     }
 
     private static void buildMeshes() {
-        if (caneWhole != null) return;
-        caneWhole = HolidayModels.caneWhole();
-        caneBitten = HolidayModels.caneBitten();
+        if (caneRW != null) return;
+        caneRW = HolidayModels.cane(false);
+        caneRWBitten = HolidayModels.caneBitten(false);
+        caneRG = HolidayModels.cane(true);
+        caneRGBitten = HolidayModels.caneBitten(true);
         mug = HolidayModels.mug();
         mallow = HolidayModels.marshmallow();
         gingerWhole = HolidayModels.gingerWhole();
         gingerBitten = HolidayModels.gingerBitten();
-        gingerArm = HolidayModels.gingerArm();
-        crumbRed = HolidayModels.crumb(HolidayModels.CRUMB_CANE);
-        crumbWhite = HolidayModels.crumb(HolidayModels.CRUMB_CANE_2);
+        gingerUpper = HolidayModels.gingerUpperArm();
+        gingerFore = HolidayModels.gingerForearm();
+        crumbRed = HolidayModels.crumb(HolidayModels.RED);
+        crumbWhite = HolidayModels.crumb(HolidayModels.WHITE);
+        crumbGreen = HolidayModels.crumb(HolidayModels.GREEN);
         crumbCookie = HolidayModels.crumb(HolidayModels.CRUMB_COOKIE);
     }
 }
