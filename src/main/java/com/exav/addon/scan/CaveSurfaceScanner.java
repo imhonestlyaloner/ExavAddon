@@ -19,11 +19,12 @@ public final class CaveSurfaceScanner {
     private final int chunkX;
     private final int chunkZ;
     private final LongOpenHashSet seen = new LongOpenHashSet();
-    private final Evidence evidence = new Evidence();
+    private final Evidence evidence;
     private int cave;
     private int index;
 
-    public CaveSurfaceScanner(BlockReader reader, List<long[]> caves, int chunkX, int chunkZ) {
+    public CaveSurfaceScanner(BlockReader reader, List<long[]> caves, int chunkX, int chunkZ, boolean skipMine) {
+        this.evidence = new Evidence(skipMine);
         this.reader = reader;
         this.caves = caves;
         this.chunkX = chunkX;

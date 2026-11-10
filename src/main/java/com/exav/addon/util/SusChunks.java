@@ -26,6 +26,19 @@ public final class SusChunks {
         return m != null && m.isEnabled() ? m.flaggedChunks() : LongSet.of();
     }
 
+    /** The given chunks plus every chunk within radius of them. */
+    public static LongOpenHashSet around(LongSet chunks, int radius) {
+        LongOpenHashSet out = new LongOpenHashSet();
+        for (var it = chunks.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            int cx = net.minecraft.world.level.ChunkPos.getX(key), cz = net.minecraft.world.level.ChunkPos.getZ(key);
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) out.add(net.minecraft.world.level.ChunkPos.asLong(cx + dx, cz + dz));
+            }
+        }
+        return out;
+    }
+
     /** Union of the flagged chunks of the chosen source(s). */
     public static LongOpenHashSet flagged(String source) {
         LongOpenHashSet out = new LongOpenHashSet();

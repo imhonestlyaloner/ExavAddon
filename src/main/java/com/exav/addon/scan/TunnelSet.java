@@ -28,7 +28,7 @@ public final class TunnelSet {
     private int current;
 
     /** @param minLength3x3 minimum length for the 3x3 (and larger) tunnels; smaller shapes keep their own minimums */
-    public TunnelSet(BlockReader reader, int chunkX, int chunkZ, boolean allShapes, int minLength3x3) {
+    public TunnelSet(BlockSource reader, int chunkX, int chunkZ, boolean allShapes, int minLength3x3) {
         for (int[] s : allShapes ? ALL : ONLY_3X3) {
             int min = s[0] >= 3 ? minLength3x3 : s[3];
             scanners.add(new TunnelScanner(reader, chunkX, chunkZ, min, s[0], s[1], s[2]));
@@ -44,13 +44,17 @@ public final class TunnelSet {
         return true;
     }
 
-    /** Every tunnel found, except ones you dug. */
+    /** Every tunnel found (including ones you dug; filter with {@link #withoutMine}). */
     public List<Tunnel> results() {
         List<Tunnel> out = new ArrayList<>();
-        for (TunnelScanner s : scanners) {
-            for (Tunnel t : s.results()) {
-                if (!t.isMine()) out.add(t);
-            }
+        for (TunnelScanner s : scanners) out.addAll(s.results());
+        return out;
+    }
+
+    public static List<Tunnel> withoutMine(List<Tunnel> tunnels) {
+        List<Tunnel> out = new ArrayList<>(tunnels.size());
+        for (Tunnel t : tunnels) {
+            if (!t.isMine()) out.add(t);
         }
         return out;
     }

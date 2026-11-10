@@ -15,7 +15,7 @@ public final class CaveScanner {
     private static final int MAX_CAVE_BLOCKS = 250_000;
     private static final int[][] DIRS = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 
-    private final BlockReader reader;
+    private final BlockSource reader;
     private final int minSize;
     private final int x0, z0, x1, z1; // inclusive block bounds of the area
     private final LongOpenHashSet visited = new LongOpenHashSet();
@@ -28,7 +28,7 @@ public final class CaveScanner {
     private int columnTop;
     private boolean done;
 
-    public CaveScanner(BlockReader reader, int chunkX, int chunkZ, int radiusChunks, int minSize) {
+    public CaveScanner(BlockSource reader, int chunkX, int chunkZ, int radiusChunks, int minSize) {
         this.reader = reader;
         this.minSize = minSize;
         this.x0 = (chunkX - radiusChunks) << 4;

@@ -23,6 +23,12 @@ public final class Evidence {
     private final LongArrayList markers = new LongArrayList();
     private final IntArrayList radii = new IntArrayList();
     private final LongOpenHashSet markerCells = new LongOpenHashSet();
+    private final boolean skipMine;
+
+    /** @param skipMine leave out blocks you placed yourself */
+    public Evidence(boolean skipMine) {
+        this.skipMine = skipMine;
+    }
 
     public void add(int x, int y, int z, Block block) {
         int radius = BaseEvidence.structureRadius(block);
@@ -35,7 +41,7 @@ public final class Evidence {
             return;
         }
         byte k = BaseEvidence.kind(block);
-        if (k == BaseEvidence.NONE || MyEdits.isMine(x, y, z) || stored[k]++ >= CAP) return;
+        if (k == BaseEvidence.NONE || (skipMine && MyEdits.isMine(x, y, z)) || stored[k]++ >= CAP) return;
         positions.add(BlockPos.asLong(x, y, z));
         kinds.add(k);
     }

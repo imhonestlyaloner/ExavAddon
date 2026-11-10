@@ -31,11 +31,12 @@ public final class Merger {
     private Merger() {
     }
 
-    public static Output merge(Collection<ChunkJob.Result> results, int minCaveSize) {
+    public static Output merge(Collection<ChunkJob.Result> results, int minCaveSize, boolean includeMine) {
         List<Tunnel> tunnels = mergeTunnels(results);
+        if (!includeMine) tunnels = TunnelSet.withoutMine(tunnels);
         List<AABB> boxes = new ArrayList<>(tunnels.size());
         for (Tunnel t : tunnels) boxes.addAll(t.boxes());
-        return new Output(tunnels, boxes, mergeCaves(results, tunnels, minCaveSize));
+        return new Output(tunnels, boxes, mergeCaves(results, tunnels, minCaveSize, includeMine));
     }
 
     private static List<Tunnel> mergeTunnels(Collection<ChunkJob.Result> results) {
@@ -62,7 +63,7 @@ public final class Merger {
         return merged;
     }
 
-    private static List<Cave> mergeCaves(Collection<ChunkJob.Result> results, List<Tunnel> tunnels, int minCaveSize) {
+    private static List<Cave> mergeCaves(Collection<ChunkJob.Result> results, List<Tunnel> tunnels, int minCaveSize, boolean includeMine) {
         LongOpenHashSet all = new LongOpenHashSet();
         for (ChunkJob.Result r : results) {
             for (long[] cave : r.caves()) {
@@ -72,7 +73,7 @@ public final class Merger {
         if (all.isEmpty()) return List.of();
 
         // air you dug yourself isn't cave
-        all.removeIf(p -> com.exav.addon.util.MyEdits.isMine(p));
+        if (!includeMine) all.removeIf(p -> com.exav.addon.util.MyEdits.isMine(p));
         // tunnels are drawn on their own, don't count them as cave
         for (Tunnel t : tunnels) {
             for (AABB b : t.boxes()) {

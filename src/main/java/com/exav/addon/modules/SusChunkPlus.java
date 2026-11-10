@@ -4,6 +4,9 @@ import com.exav.addon.ExavAddon;
 import com.exav.addon.scan.BlockReader;
 import com.exav.addon.scan.ChunkJob;
 import com.exav.addon.scan.Merger;
+import com.exav.addon.scan.Tunnel;
+import com.exav.addon.scan.TunnelArea;
+import com.exav.addon.scan.TunnelCache;
 import com.exav.addon.util.SusChunks;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
@@ -18,6 +21,9 @@ import net.anubis.client.event.EventHandler;
 import net.anubis.client.event.impl.Render3DEvent;
 import net.anubis.client.event.impl.TickEvent;
 import net.anubis.client.module.ClientModule;
+import net.anubis.client.module.HudOverlayProvider;
+import net.anubis.client.gui.WorldLabel;
+import imgui.ImDrawList;
 import net.anubis.client.module.setting.BooleanSetting;
 import net.anubis.client.module.setting.ColorSetting;
 import net.anubis.client.module.setting.ModeSetting;
@@ -35,7 +41,7 @@ import net.minecraft.world.phys.Vec3;
  * Whenever a sus chunk gets flagged (by Sus Chunk Finder and/or Better Sus Chunk), this also labels
  * the 3x3 tunnels running through it and the caves around it.
  */
-public final class SusChunkPlus extends ClientModule {
+public final class SusChunkPlus extends ClientModule implements HudOverlayProvider {
     private static final ExecutorService MERGE_THREAD = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "Exav SusChunkPlus merge");
         t.setDaemon(true);
@@ -47,6 +53,7 @@ public final class SusChunkPlus extends ClientModule {
     private final BooleanSetting tunnels = addSetting("tunnels", new BooleanSetting("Tunnels", true));
     private final ModeSetting tunnelShapes = addSetting("tunnel-shapes", new ModeSetting("Tunnel Shapes", "All", "All", "3x3 Only"));
     private final NumberSetting minTunnelLength = addSetting("min-tunnel-length", new NumberSetting("Min Tunnel Length (3x3+)", 8.0F, 4.0F, 32.0F).step(1.0F));
+    private final NumberSetting tunnelRadius = addSetting("tunnel-radius", new NumberSetting("Tunnel Radius (chunks)", 1.0F, 0.0F, 3.0F).step(1.0F));
     private final ColorSetting tunnelColor = addSetting("tunnel-color", new ColorSetting("Tunnel Color", 0xFFFF8C00));
 
     private final BooleanSetting caves = addSetting("caves", new BooleanSetting("Caves", true));
@@ -55,6 +62,8 @@ public final class SusChunkPlus extends ClientModule {
     private final BooleanSetting caveFill = addSetting("cave-fill", new BooleanSetting("Fill Caves", true));
     private final ColorSetting caveColor = addSetting("cave-color", new ColorSetting("Cave Color", 0xFF00C8FF));
 
+    private final BooleanSetting includeMine = addSetting("include-mine", new BooleanSetting("Count My Own Edits", false));
+    private final BooleanSetting debugInfo = addSetting("debug-info", new BooleanSetting("Debug Info", true));
     private final NumberSetting lineWidth = addSetting("line-width", new NumberSetting("Line Width", 2.0F, 1.0F, 5.0F).step(0.5F));
     private final NumberSetting fillAlpha = addSetting("fill-alpha", new NumberSetting("Fill Opacity", 40.0F, 0.0F, 255.0F).step(5.0F));
     private final NumberSetting rescanSeconds = addSetting("rescan-seconds", new NumberSetting("Rescan Every (s)", 20.0F, 5.0F, 120.0F).step(5.0F));
@@ -63,6 +72,7 @@ public final class SusChunkPlus extends ClientModule {
     private final Long2ObjectOpenHashMap<ChunkJob.Result> results = new Long2ObjectOpenHashMap<>();
     private final LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
     private final LongOpenHashSet queued = new LongOpenHashSet();
+    private final TunnelCache tunnelCache = new TunnelCache();
     private ChunkJob current;
     private BlockReader reader;
     private ClientLevel lastLevel;
@@ -77,6 +87,7 @@ public final class SusChunkPlus extends ClientModule {
         super("Exav's Relog Alternative", "When a sus chunk gets flagged, also labels player-dug tunnels through it and caves around it. Ignores your own digging.", ExavAddon.CATEGORY);
         minTunnelLength.visibleWhen(tunnels::get);
         tunnelShapes.visibleWhen(tunnels::get);
+        tunnelRadius.visibleWhen(tunnels::get);
         tunnelColor.visibleWhen(tunnels::get);
         caveRadius.visibleWhen(caves::get);
         minCaveSize.visibleWhen(caves::get);
@@ -87,6 +98,8 @@ public final class SusChunkPlus extends ClientModule {
         tunnels.onChange(rescan);
         tunnelShapes.onChange(rescan);
         minTunnelLength.onChange(rescan);
+        tunnelRadius.onChange(rescan);
+        includeMine.onChange(() -> dirty = true);
         caves.onChange(rescan);
         caveRadius.onChange(rescan);
         minCaveSize.onChange(rescan);
@@ -107,6 +120,7 @@ public final class SusChunkPlus extends ClientModule {
         queue.clear();
         queued.clear();
         current = null;
+        tunnelCache.clear();
         reader = null;
         lastLevel = null;
         dirty = false;
@@ -160,15 +174,20 @@ public final class SusChunkPlus extends ClientModule {
                 int cx = ChunkPos.getX(key);
                 int cz = ChunkPos.getZ(key);
                 if (!reader.isLoaded(cx, cz)) continue;
-                current = new ChunkJob(reader, key, cx, cz,
-                        tunnels.get(), tunnelShapes.is("All"), minTunnelLength.getInt(),
-                        caves.get(), caveRadius.getInt(), minCaveSize.getInt());
+                // cached chunk scans stay valid a bit less than the rescan period, so a rescan really rescans
+                long maxAge = rescanSeconds.getInt() * 1000L - 1000L;
+                TunnelArea area = new TunnelArea(reader, tunnelCache, maxAge, cx, cz, tunnelRadius.getInt(),
+                        tunnelShapes.is("All"), minTunnelLength.getInt());
+                current = new ChunkJob(reader, key, cx, cz, results.get(key),
+                        tunnels.get(), area, caves.get(), caveRadius.getInt(), minCaveSize.getInt());
             }
-            if (current.step(deadline)) {
+            boolean done = current.step(deadline);
+            if (done || current.hasProgress()) {
+                // show tunnels as each chunk finishes instead of waiting for the whole area
                 results.put(current.chunkKey(), current.result());
-                current = null;
                 dirty = true;
             }
+            if (done) current = null;
         }
     }
 
@@ -178,7 +197,8 @@ public final class SusChunkPlus extends ClientModule {
         int gen = generation;
         List<ChunkJob.Result> snapshot = new ArrayList<>(results.values());
         int minSize = minCaveSize.getInt();
-        CompletableFuture.supplyAsync(() -> Merger.merge(snapshot, minSize), MERGE_THREAD)
+        boolean mine = includeMine.get();
+        CompletableFuture.supplyAsync(() -> Merger.merge(snapshot, minSize, mine), MERGE_THREAD)
                 .whenComplete((out, error) -> Minecraft.getInstance().execute(() -> {
                     merging = false;
                     if (error == null && gen == generation && isEnabled()) output = out;
@@ -220,6 +240,42 @@ public final class SusChunkPlus extends ClientModule {
                 }
             }
         }
+    }
+
+    @Override
+    public boolean isHudOverlayEnabled() {
+        return isEnabled() && debugInfo.get() && Minecraft.getInstance().level != null && !results.isEmpty();
+    }
+
+    /** "Relog Alt: 2 tunnels · 4 caves" (or scan progress) over each flagged chunk, to see what it's doing. */
+    @Override
+    public void renderHudOverlay(ImDrawList dl, float screenW, float screenH) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+        Merger.Output out = output;
+        for (var entry : results.long2ObjectEntrySet()) {
+            long key = entry.getLongKey();
+            int cx = ChunkPos.getX(key), cz = ChunkPos.getZ(key);
+            int tunnelCount = 0, caveCount = 0;
+            for (Tunnel t : out.tunnels()) {
+                if (near(t.boxes().get(0), cx, cz, Math.max(tunnelRadius.getInt(), 0))) tunnelCount++;
+            }
+            for (Merger.Cave c : out.caves()) {
+                if (near(c.bounds(), cx, cz, caveRadius.getInt())) caveCount++;
+            }
+            String status = current != null && current.chunkKey() == key ? "scanning " + current.progress()
+                    : entry.getValue().complete() ? "scanned" : "queued";
+            Vec3 pos = new Vec3((cx << 4) + 8.0, 70.0, (cz << 4) + 8.0);
+            float[] screen = WorldLabel.project(mc, pos, screenW, screenH);
+            if (screen == null) continue;
+            WorldLabel.drawText(dl, screen[0], screen[1], "Relog Alt: " + tunnelCount + " tunnels · " + caveCount + " caves", status, 1.0F);
+        }
+    }
+
+    private static boolean near(AABB box, int cx, int cz, int radius) {
+        int bx0 = ((int) Math.floor(box.minX)) >> 4, bx1 = ((int) Math.floor(box.maxX - 1)) >> 4;
+        int bz0 = ((int) Math.floor(box.minZ)) >> 4, bz1 = ((int) Math.floor(box.maxZ - 1)) >> 4;
+        return bx1 >= cx - radius && bx0 <= cx + radius && bz1 >= cz - radius && bz0 <= cz + radius;
     }
 
     private static void quad(WorldQuads quads, Vec3 a, Vec3 b, Vec3 c, Vec3 d, int argb) {

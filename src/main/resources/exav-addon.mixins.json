@@ -3,6 +3,7 @@
   "package": "com.exav.addon.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "LocalPlayerMixin",
     "MultiPlayerGameModeMixin"
   ],
   "injectors": {

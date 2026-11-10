@@ -22,7 +22,7 @@ public final class TunnelScanner {
     /** consecutive non-3x3 slices allowed inside a tunnel (side openings, crossings) */
     private static final int MAX_GAP = 4;
 
-    private final BlockReader reader;
+    private final BlockSource reader;
     private final int chunkX;
     private final int chunkZ;
     private final int minLength;
@@ -41,11 +41,11 @@ public final class TunnelScanner {
     private int gap;
     private boolean inRun;
 
-    public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength) {
+    public TunnelScanner(BlockSource reader, int chunkX, int chunkZ, int minLength) {
         this(reader, chunkX, chunkZ, minLength, 3, 3, 0);
     }
 
-    public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength, int width, int height) {
+    public TunnelScanner(BlockSource reader, int chunkX, int chunkZ, int minLength, int width, int height) {
         this(reader, chunkX, chunkZ, minLength, width, height, 0);
     }
 
@@ -53,7 +53,7 @@ public final class TunnelScanner {
      * For staircases (slope != 0), each scan line's floor moves by slope per block, and y means
      * the floor height at the chunk's first block along the axis.
      */
-    public TunnelScanner(BlockReader reader, int chunkX, int chunkZ, int minLength, int width, int height, int slope) {
+    public TunnelScanner(BlockSource reader, int chunkX, int chunkZ, int minLength, int width, int height, int slope) {
         this.reader = reader;
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;

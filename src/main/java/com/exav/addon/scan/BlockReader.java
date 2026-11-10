@@ -10,11 +10,7 @@ import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /** Fast block lookups on the client level, with a one-chunk cache. Unloaded chunks read as UNLOADED. */
-public final class BlockReader {
-    public static final byte UNLOADED = 0;
-    public static final byte OPEN = 1;
-    public static final byte SOLID = 2;
-
+public final class BlockReader implements BlockSource {
     private final ClientLevel level;
     private final int minY;
     private final int maxY; // exclusive
@@ -28,10 +24,12 @@ public final class BlockReader {
         this.maxY = level.getMinY() + level.getHeight();
     }
 
+    @Override
     public int minY() {
         return minY;
     }
 
+    @Override
     public int maxY() {
         return maxY;
     }
@@ -46,11 +44,13 @@ public final class BlockReader {
         return cached;
     }
 
+    @Override
     public boolean isLoaded(int chunkX, int chunkZ) {
         return chunk(chunkX, chunkZ) != null;
     }
 
     /** OPEN = nothing to collide with and no fluid (air, torches, rails...), SOLID = anything else. */
+    @Override
     public byte get(int x, int y, int z) {
         if (y < minY) return SOLID;
         if (y >= maxY) return OPEN;
@@ -82,15 +82,9 @@ public final class BlockReader {
         return level;
     }
 
-    public boolean open(int x, int y, int z) {
-        return get(x, y, z) == OPEN;
-    }
-
-    public boolean solid(int x, int y, int z) {
-        return get(x, y, z) == SOLID;
-    }
 
     /** Y of the highest non-air block in the column, or minY - 1 if the chunk isn't loaded. */
+    @Override
     public int surface(int x, int z) {
         LevelChunk chunk = chunk(x >> 4, z >> 4);
         if (chunk == null) return minY - 1;

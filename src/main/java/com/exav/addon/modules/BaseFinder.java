@@ -10,9 +10,11 @@ import com.exav.addon.scan.LightScanner;
 import com.exav.addon.scan.Tunnel;
 import com.exav.addon.scan.LiveEdits;
 import com.exav.addon.scan.TunnelSet;
+import com.exav.addon.util.MyDrops;
 import com.exav.addon.util.MyEdits;
 import com.exav.addon.util.SusChunks;
 import imgui.ImDrawList;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayFIFOQueue;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -31,6 +33,8 @@ import net.anubis.client.module.setting.NumberSetting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.AABB;
@@ -49,8 +53,10 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
     private final BooleanSetting scanCaves = addSetting("scan-caves", new BooleanSetting("Scan Nearby Caves", true));
     private final NumberSetting caveRadius = addSetting("cave-radius", new NumberSetting("Cave Radius (chunks)", 1.0F, 0.0F, 3.0F).step(1.0F));
     private final BooleanSetting detectLight = addSetting("detect-light", new BooleanSetting("Detect Hidden Light", true));
+    private final BooleanSetting countItems = addSetting("count-items", new BooleanSetting("Count Dropped Items", true));
     private final BooleanSetting liveEdits = addSetting("live-edits", new BooleanSetting("Watch Live Edits", true));
     private final NumberSetting liveWindow = addSetting("live-window", new NumberSetting("Live Edit Window (min)", 10.0F, 1.0F, 60.0F).step(1.0F));
+    private final BooleanSetting includeMine = addSetting("include-mine", new BooleanSetting("Count My Own Edits", false));
     private final NumberSetting minPercent = addSetting("min-percent", new NumberSetting("Hide Below %", 0.0F, 0.0F, 90.0F).step(5.0F));
     private final BooleanSetting showDetails = addSetting("show-details", new BooleanSetting("Show Evidence", true));
     private final NumberSetting labelY = addSetting("label-y", new NumberSetting("Label Height", 66.0F, -60.0F, 320.0F).step(1.0F));
@@ -64,6 +70,8 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
     private final LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
     private final LongOpenHashSet queued = new LongOpenHashSet();
     private LongOpenHashSet flagged = new LongOpenHashSet();
+    /** per flagged chunk: other players' items lying underground in or near it */
+    private final Long2IntOpenHashMap items = new Long2IntOpenHashMap();
     private Job current;
     private BlockReader reader;
     private ClientLevel lastLevel;
@@ -95,7 +103,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             this.radius = caveRadius.getInt();
             this.surfacesOn = scanCaves.get();
             this.lightOn = detectLight.get();
-            this.evidence = new BaseEvidence(reader, chunk, cx, cz, undergroundOnly.get());
+            this.evidence = new BaseEvidence(reader, chunk, cx, cz, undergroundOnly.get(), !includeMine.get());
             this.tunnels = countTunnels.get() ? new TunnelSet(reader, cx, cz, true, 8) : null;
             this.caves = surfacesOn || lightOn ? new CaveScanner(reader, cx, cz, radius, CAVE_MIN_SIZE) : null;
         }
@@ -109,7 +117,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
                     case 3 -> caves == null || caves.step(deadline);
                     case 4 -> {
                         if (!surfacesOn) yield true;
-                        if (surfaces == null) surfaces = new CaveSurfaceScanner(reader, caves.results(), cx, cz);
+                        if (surfaces == null) surfaces = new CaveSurfaceScanner(reader, caves.results(), cx, cz, !includeMine.get());
                         yield surfaces.step(deadline);
                     }
                     case 5 -> {
@@ -133,7 +141,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             int tunnelCount = 0, branchCount = 0;
             if (tunnels != null) {
                 // stronghold corridors and trial chamber halls are exactly 3 wide, so tunnels inside structures don't count
-                for (Tunnel t : tunnels.results()) {
+                for (Tunnel t : includeMine.get() ? tunnels.results() : TunnelSet.withoutMine(tunnels.results())) {
                     AABB b = t.boxes().get(0);
                     if (zones.contains((int) b.getCenter().x, (int) b.minY, (int) b.getCenter().z)) ignored[0]++;
                     else if (t.width() == 1 && t.slope() == 0) branchCount++;
@@ -163,6 +171,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         source.onChange(rescan);
         undergroundOnly.onChange(rescan);
         countTunnels.onChange(rescan);
+        includeMine.onChange(rescan);
         scanCaves.onChange(rescan);
         caveRadius.onChange(rescan);
         detectLight.onChange(rescan);
@@ -209,6 +218,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         }
         if (current != null && !flagged.contains(current.key)) current = null;
         pruneEdits();
+        if (ticks % 20 == 0) countItems(level);
 
         boolean rescanAll = ticks % (rescanSeconds.getInt() * 20) == 0;
         for (LongIterator it = flagged.iterator(); it.hasNext(); ) {
@@ -242,7 +252,8 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         BlockPos pos = event.pos;
         if (pos.getY() >= reader.surface(pos.getX(), pos.getZ()) - 3) return; // underground only
         // your own breaking / placing never counts
-        if (MyEdits.record(pos, event.oldState.isAir(), event.newState.isAir(), event.oldState.getBlock() != event.newState.getBlock())) return;
+        if (MyEdits.record(pos, event.oldState.isAir(), event.newState.isAir(), event.oldState.getBlock() != event.newState.getBlock())
+                && !includeMine.get()) return;
         if (!LiveEdits.looksPlayerMade(event.oldState, event.newState, pos)) return;
 
         long now = System.currentTimeMillis();
@@ -255,6 +266,24 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
                 Scan scan = results.get(key);
                 if (scan != null && scan.zones().contains(pos.getX(), pos.getY(), pos.getZ())) continue;
                 edits.computeIfAbsent(key, k -> new LongArrayList()).add(now);
+            }
+        }
+    }
+
+    private void countItems(ClientLevel level) {
+        items.clear();
+        if (!countItems.get() || flagged.isEmpty()) return;
+        int r = caveRadius.getInt();
+        for (Entity entity : level.entitiesForRendering()) {
+            if (!(entity instanceof ItemEntity item) || item.isRemoved()) continue;
+            if (!includeMine.get() && MyDrops.isMine(item)) continue;
+            if (item.getBlockY() >= reader.surface(item.getBlockX(), item.getBlockZ()) - 3) continue;
+            int icx = item.getBlockX() >> 4, icz = item.getBlockZ() >> 4;
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    long key = ChunkPos.asLong(icx + dx, icz + dz);
+                    if (flagged.contains(key)) items.addTo(key, 1);
+                }
             }
         }
     }
@@ -292,7 +321,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             LongArrayList times = edits.get(key);
             int liveCount = times == null ? 0 : times.size();
             int ago = liveCount == 0 ? 0 : (int) ((now - times.getLong(liveCount - 1)) / 60_000L);
-            BaseEvidence.Result r = BaseEvidence.score(entry.getValue().counts(), liveCount, ago);
+            BaseEvidence.Result r = BaseEvidence.score(entry.getValue().counts(), liveCount, ago, items.get(key));
             if (r.percent() < hideBelow) continue;
 
             float[] screen = WorldLabel.project(mc, pos, screenW, screenH);

@@ -1,7 +1,9 @@
 package com.exav.addon;
 
 import com.exav.addon.modules.BaseFinder;
+import com.exav.addon.modules.DroppedItems;
 import com.exav.addon.modules.SusChunkPlus;
+import com.exav.addon.util.MyDrops;
 import com.exav.addon.util.MyEdits;
 import net.anubis.client.addon.AnubisAddon;
 import net.anubis.client.module.ModuleCategory;
@@ -19,8 +21,10 @@ public final class ExavAddon extends AnubisAddon {
     @Override
     public void onInitialize() {
         MyEdits.init();
+        MyDrops.init();
         ModuleRegistry.add(new SusChunkPlus());
         ModuleRegistry.add(new BaseFinder());
+        ModuleRegistry.add(new DroppedItems());
     }
 
     @Override

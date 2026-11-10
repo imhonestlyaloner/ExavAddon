@@ -37,10 +37,11 @@ public final class BaseEvidence {
     private final int baseX;
     private final int baseZ;
     private final int[] surface = new int[256];
-    private final Evidence evidence = new Evidence();
+    private final Evidence evidence;
     private int sectionIndex;
 
-    public BaseEvidence(BlockReader reader, LevelChunk chunk, int chunkX, int chunkZ, boolean undergroundOnly) {
+    public BaseEvidence(BlockReader reader, LevelChunk chunk, int chunkX, int chunkZ, boolean undergroundOnly, boolean skipMine) {
+        this.evidence = new Evidence(skipMine);
         this.chunk = chunk;
         this.undergroundOnly = undergroundOnly;
         this.baseX = chunkX << 4;
@@ -102,7 +103,7 @@ public final class BaseEvidence {
      * p = 1 - (1 - prior) * e^(-score / 3)
      * Stuff in the nearby caves counts a bit less than stuff right under the chunk.
      */
-    public static Result score(Counts c, int liveEdits, int lastEditMinutesAgo) {
+    public static Result score(Counts c, int liveEdits, int lastEditMinutesAgo, int droppedItems) {
         int[] k = new int[KINDS];
         double[] v = new double[KINDS];
         for (int i = 0; i < KINDS; i++) {
@@ -122,13 +123,15 @@ public final class BaseEvidence {
                 + 2.5 * Math.min(v[PORTAL], 1)
                 + 1.3 * Math.min(c.tunnels(), 5)
                 + 1.5 * Math.min(c.branchMines(), 4)
-                + 0.4 * Math.min(liveEdits, 12);
+                + 0.4 * Math.min(liveEdits, 12)
+                + 0.5 * Math.min(droppedItems, 6);
         double prior = c.flaggedByBoth() ? 0.18 : 0.10;
         double p = 1.0 - (1.0 - prior) * Math.exp(-(weak + strong) / 3.0);
         int percent = (int) Math.round(Math.max(1.0, Math.min(99.0, p * 100.0)));
 
         List<String> parts = new ArrayList<>();
         if (liveEdits > 0) parts.add(liveEdits + " live edit" + (liveEdits == 1 ? "" : "s") + " (" + lastEditMinutesAgo + "m ago)");
+        add(parts, droppedItems, "dropped item");
         add(parts, k[RARE_STORAGE], "shulker/echest");
         add(parts, k[STORAGE], "storage");
         add(parts, k[UTILITY], "station");
