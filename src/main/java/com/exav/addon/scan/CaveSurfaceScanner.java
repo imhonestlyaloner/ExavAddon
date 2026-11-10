@@ -19,7 +19,7 @@ public final class CaveSurfaceScanner {
     private final int chunkX;
     private final int chunkZ;
     private final LongOpenHashSet seen = new LongOpenHashSet();
-    private final int[] counts = new int[BaseEvidence.KINDS];
+    private final Evidence evidence = new Evidence();
     private int cave;
     private int index;
 
@@ -52,12 +52,11 @@ public final class CaveSurfaceScanner {
         if (x >> 4 == chunkX && z >> 4 == chunkZ) return;
         if (!seen.add(BlockPos.asLong(x, y, z))) return;
         BlockState state = reader.state(x, y, z);
-        if (state == null) return;
-        byte k = BaseEvidence.kind(state.getBlock());
-        if (k != BaseEvidence.NONE) counts[k]++;
+        if (state == null || !BaseEvidence.interesting(state.getBlock())) return;
+        evidence.add(x, y, z, state.getBlock());
     }
 
-    public int[] counts() {
-        return counts.clone();
+    public Evidence evidence() {
+        return evidence;
     }
 }

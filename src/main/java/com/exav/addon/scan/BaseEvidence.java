@@ -1,17 +1,17 @@
 package com.exav.addon.scan;
 
 import it.unimi.dsi.fastutil.objects.Reference2ByteOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 
 /**
- * Counts signs of players in the underground part of one chunk and turns them into a rough base likelihood.
- * Runs one 16x16x16 section per step so it can be spread over ticks.
+ * Block categories and scoring for Base Finder, plus the scan of the underground part of the sus chunk itself.
+ * The chunk scan runs one 16x16x16 section per step so it can be spread over ticks.
  */
 public final class BaseEvidence {
     // block kinds
@@ -20,38 +20,41 @@ public final class BaseEvidence {
     static final byte STORAGE = 2;      // chests, barrels, hoppers, droppers, dispensers
     static final byte UTILITY = 3;      // crafting/furnaces/anvils/enchanting/brewing/beds...
     static final byte SIGN = 4;
-    static final byte LIGHT = 5;        // torches, lanterns
+    static final byte LIGHT = 5;        // torches, lanterns, glowstone, froglights, lamps, campfires, candles...
     static final byte BUILD = 6;        // wool, concrete, glass, carpet, terracotta
     static final byte REDSTONE = 7;     // repeaters, comparators, pistons, observers, dust
     static final byte PORTAL = 8;       // nether portal blocks
     static final byte OBSIDIAN = 9;
-    static final byte STRUCTURE = 10;   // spawners, cobwebs, end portal frames, sculk shriekers, trial spawners, vaults...
+    static final byte STRUCTURE = 10;   // structure markers: never counted, they mark zones to ignore
     static final byte PLACED = 11;      // cobblestone, cobbled deepslate, netherrack...: what players pillar/patch with
     public static final int KINDS = 12;
 
     private static final Reference2ByteOpenHashMap<Block> KIND_CACHE = new Reference2ByteOpenHashMap<>();
+    private static final Reference2IntOpenHashMap<Block> RADIUS_CACHE = new Reference2IntOpenHashMap<>();
 
-    private final BlockReader reader;
     private final LevelChunk chunk;
-    private final int chunkX;
-    private final int chunkZ;
     private final boolean undergroundOnly;
+    private final int baseX;
+    private final int baseZ;
     private final int[] surface = new int[256];
-    private final int[] counts = new int[KINDS];
+    private final Evidence evidence = new Evidence();
     private int sectionIndex;
 
     public BaseEvidence(BlockReader reader, LevelChunk chunk, int chunkX, int chunkZ, boolean undergroundOnly) {
-        this.reader = reader;
         this.chunk = chunk;
-        this.chunkX = chunkX;
-        this.chunkZ = chunkZ;
         this.undergroundOnly = undergroundOnly;
+        this.baseX = chunkX << 4;
+        this.baseZ = chunkZ << 4;
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 // a few blocks of margin so houses / farms sitting on the surface don't count
-                surface[x << 4 | z] = reader.surface((chunkX << 4) + x, (chunkZ << 4) + z) - 3;
+                surface[x << 4 | z] = reader.surface(baseX + x, baseZ + z) - 3;
             }
         }
+    }
+
+    public Evidence evidence() {
+        return evidence;
     }
 
     /** @return true once every section has been scanned */
@@ -68,26 +71,27 @@ public final class BaseEvidence {
     private void scanSection(LevelChunkSection section, int baseY) {
         if (section == null || section.hasOnlyAir()) return;
         // palette check: skip sections that can't contain anything we care about (most of them)
-        if (!section.getStates().maybeHas(state -> kind(state.getBlock()) != NONE)) return;
+        if (!section.getStates().maybeHas(state -> interesting(state.getBlock()))) return;
         for (int y = 0; y < 16; y++) {
             int wy = baseY + y;
             for (int x = 0; x < 16; x++) {
                 for (int z = 0; z < 16; z++) {
-                    if (undergroundOnly && wy >= surface[x << 4 | z]) continue;
-                    BlockState state = section.getBlockState(x, y, z);
-                    byte k = kind(state.getBlock());
-                    if (k != NONE) counts[k]++;
+                    // structure markers count wherever they are, evidence only underground
+                    Block block = section.getBlockState(x, y, z).getBlock();
+                    if (!interesting(block)) continue;
+                    if (undergroundOnly && wy >= surface[x << 4 | z] && structureRadius(block) == 0) continue;
+                    evidence.add(baseX + x, wy, baseZ + z, block);
                 }
             }
         }
     }
 
-    public int[] counts() {
-        return counts.clone();
+    static boolean interesting(Block block) {
+        return kind(block) != NONE || structureRadius(block) > 0;
     }
 
-    /** Everything found for one flagged chunk, before live edits are added in. */
-    public record Counts(int[] chunk, int[] caves, int tunnels, int branchMines, boolean flaggedByBoth) {
+    /** Everything found for one flagged chunk (structure zones already taken out), before live edits are added in. */
+    public record Counts(int[] chunk, int[] caves, int tunnels, int branchMines, int hiddenLight, int ignored, boolean flaggedByBoth) {
     }
 
     public record Result(int percent, String summary) {
@@ -105,17 +109,15 @@ public final class BaseEvidence {
             k[i] = c.chunk()[i] + c.caves()[i];
             v[i] = c.chunk()[i] + 0.6 * c.caves()[i];
         }
-        boolean structure = k[STRUCTURE] > 0;
         double weak = 1.0 * Math.min(v[STORAGE], 6)
                 + 1.5 * Math.min(v[UTILITY], 6)
                 + 1.0 * Math.min(v[SIGN], 4)
-                + 0.25 * Math.min(v[LIGHT], 16)
+                + 0.3 * Math.min(v[LIGHT], 16)
                 + 0.04 * Math.min(v[BUILD], 100)
                 + 0.6 * Math.min(v[REDSTONE], 10)
                 + 0.3 * Math.min(v[OBSIDIAN], 10)
-                + 0.15 * Math.min(v[PLACED], 30);
-        // dungeons, mineshafts, strongholds, ancient cities and trial chambers have chests, torches, wool etc. too
-        if (structure) weak *= 0.35;
+                + 0.15 * Math.min(v[PLACED], 30)
+                + 0.04 * Math.min(c.hiddenLight(), 75);
         double strong = 3.0 * Math.min(v[RARE_STORAGE], 4)
                 + 2.5 * Math.min(v[PORTAL], 1)
                 + 1.2 * Math.min(c.tunnels(), 5)
@@ -134,11 +136,12 @@ public final class BaseEvidence {
         add(parts, c.tunnels(), "3x3 tunnel");
         add(parts, c.branchMines(), "branch mine");
         add(parts, k[PORTAL] > 0 ? 1 : 0, "portal");
+        add(parts, k[LIGHT], "light block");
+        add(parts, c.hiddenLight(), "hidden-light block");
         add(parts, k[PLACED], "placed block");
         add(parts, k[REDSTONE], "redstone");
-        add(parts, k[LIGHT], "light");
         add(parts, k[BUILD], "build block");
-        if (structure) parts.add("near structure");
+        if (c.ignored() > 0) parts.add(c.ignored() + " ignored in structures");
         if (c.flaggedByBoth()) parts.add("both flagged");
         return new Result(percent, parts.isEmpty() ? "no evidence loaded" : String.join(" · ", parts));
     }
@@ -147,17 +150,52 @@ public final class BaseEvidence {
         if (n > 0) parts.add(n + " " + what);
     }
 
+    private static String id(Block block) {
+        return BuiltInRegistries.BLOCK.getKey(block).getPath();
+    }
+
     public static byte kind(Block block) {
         synchronized (KIND_CACHE) {
             if (KIND_CACHE.containsKey(block)) return KIND_CACHE.getByte(block);
-            byte k = classify(BuiltInRegistries.BLOCK.getKey(block).getPath());
+            byte k = classify(id(block));
             KIND_CACHE.put(block, k);
             return k;
         }
     }
 
+    /**
+     * How far around this block to ignore everything, if it only generates in a structure.
+     * 0 = not a structure block.
+     */
+    public static int structureRadius(Block block) {
+        synchronized (RADIUS_CACHE) {
+            if (RADIUS_CACHE.containsKey(block)) return RADIUS_CACHE.getInt(block);
+            int r = radiusFor(id(block));
+            RADIUS_CACHE.put(block, r);
+            return r;
+        }
+    }
+
+    static int radiusFor(String id) {
+        // dungeons: spawner in a mossy cobblestone room
+        if (id.equals("spawner") || id.equals("mossy_cobblestone") || id.startsWith("mossy_cobblestone_")) return 10;
+        // strongholds
+        if (id.equals("end_portal_frame")) return 40;
+        if (id.startsWith("infested_") || id.equals("cracked_stone_bricks") || id.equals("mossy_stone_bricks")
+                || id.equals("chiseled_stone_bricks") || id.startsWith("mossy_stone_brick_")) return 20;
+        // ancient cities
+        if (id.equals("reinforced_deepslate")) return 56;
+        if (id.equals("sculk_shrieker") || id.equals("cracked_deepslate_bricks") || id.equals("cracked_deepslate_tiles")) return 24;
+        // trial chambers
+        if (id.equals("trial_spawner") || id.equals("vault") || id.equals("heavy_core")) return 40;
+        // mineshafts (cobwebs), trail/ocean ruins
+        if (id.equals("cobweb")) return 6;
+        if (id.equals("suspicious_gravel") || id.equals("suspicious_sand")) return 16;
+        return 0;
+    }
+
     static byte classify(String id) {
-        if (id.equals("mossy_cobblestone") || id.startsWith("mossy_cobblestone_")) return STRUCTURE;
+        if (radiusFor(id) > 0) return STRUCTURE;
         if (id.equals("cobblestone") || id.startsWith("cobblestone_") || id.equals("cobbled_deepslate")
                 || id.startsWith("cobbled_deepslate_") || id.equals("netherrack") || id.equals("smooth_stone")
                 || id.equals("smooth_stone_slab") || id.equals("bricks") || id.equals("dirt_path")
@@ -171,8 +209,7 @@ public final class BaseEvidence {
                 || id.equals("beacon") || id.equals("crafter") || id.equals("jukebox") || id.equals("note_block")
                 || id.equals("loom") || id.equals("cartography_table") || id.equals("stonecutter")) return UTILITY;
         if (id.endsWith("_sign") || id.endsWith("_hanging_sign")) return SIGN;
-        if (id.endsWith("torch") || id.endsWith("lantern") && !id.equals("sea_lantern") || id.equals("glowstone")
-                || id.equals("shroomlight") || id.equals("end_rod")) return LIGHT;
+        if (isPlayerLight(id)) return LIGHT;
         if (id.endsWith("_wool") || id.endsWith("_concrete") || id.endsWith("_concrete_powder") || id.endsWith("glass")
                 || id.endsWith("glass_pane") || id.endsWith("_carpet") || id.endsWith("glazed_terracotta")
                 // no planks/fences/rails: mineshafts are full of them
@@ -184,17 +221,15 @@ public final class BaseEvidence {
                 || id.endsWith("_button") || id.endsWith("_pressure_plate") || id.equals("target")) return REDSTONE;
         if (id.equals("nether_portal")) return PORTAL;
         if (id.equals("obsidian") || id.equals("crying_obsidian")) return OBSIDIAN;
-        if (id.equals("spawner") || id.equals("trial_spawner") || id.equals("vault") || id.equals("cobweb")
-                || id.equals("end_portal_frame") || id.equals("sculk_shrieker") || id.equals("reinforced_deepslate")
-                || id.equals("mossy_cobblestone") || id.startsWith("infested_") || id.equals("suspicious_gravel")) return STRUCTURE;
         return NONE;
     }
 
-    public int chunkX() {
-        return chunkX;
-    }
-
-    public int chunkZ() {
-        return chunkZ;
+    /** Light-giving blocks that don't generate naturally underground (outside structures). */
+    static boolean isPlayerLight(String id) {
+        return id.endsWith("torch") || (id.endsWith("lantern") && !id.equals("sea_lantern")) || id.equals("sea_lantern")
+                || id.equals("glowstone") || id.equals("shroomlight") || id.equals("end_rod") || id.endsWith("froglight")
+                || id.equals("jack_o_lantern") || id.equals("redstone_lamp") || id.endsWith("campfire")
+                || id.equals("candle") || id.endsWith("_candle") || id.endsWith("copper_bulb") || id.equals("conduit")
+                || id.equals("light");
     }
 }

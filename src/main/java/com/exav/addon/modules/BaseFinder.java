@@ -5,6 +5,9 @@ import com.exav.addon.scan.BaseEvidence;
 import com.exav.addon.scan.BlockReader;
 import com.exav.addon.scan.CaveScanner;
 import com.exav.addon.scan.CaveSurfaceScanner;
+import com.exav.addon.scan.Evidence;
+import com.exav.addon.scan.LightScanner;
+import com.exav.addon.scan.Tunnel;
 import com.exav.addon.scan.LiveEdits;
 import com.exav.addon.scan.TunnelScanner;
 import com.exav.addon.util.SusChunks;
@@ -29,6 +32,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -47,6 +51,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
     private final BooleanSetting countBranchMines = addSetting("count-branch-mines", new BooleanSetting("Count Branch Mines", true));
     private final BooleanSetting scanCaves = addSetting("scan-caves", new BooleanSetting("Scan Nearby Caves", true));
     private final NumberSetting caveRadius = addSetting("cave-radius", new NumberSetting("Cave Radius (chunks)", 1.0F, 0.0F, 3.0F).step(1.0F));
+    private final BooleanSetting detectLight = addSetting("detect-light", new BooleanSetting("Detect Hidden Light", true));
     private final BooleanSetting liveEdits = addSetting("live-edits", new BooleanSetting("Watch Live Edits", true));
     private final NumberSetting liveWindow = addSetting("live-window", new NumberSetting("Live Edit Window (min)", 10.0F, 1.0F, 60.0F).step(1.0F));
     private final NumberSetting minPercent = addSetting("min-percent", new NumberSetting("Hide Below %", 0.0F, 0.0F, 90.0F).step(5.0F));
@@ -56,7 +61,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
     private final NumberSetting rescanSeconds = addSetting("rescan-seconds", new NumberSetting("Rescan Every (s)", 15.0F, 5.0F, 120.0F).step(5.0F));
     private final NumberSetting budgetMs = addSetting("budget-ms", new NumberSetting("Scan Budget (ms/tick)", 2.0F, 1.0F, 10.0F).step(1.0F));
 
-    private final Long2ObjectOpenHashMap<BaseEvidence.Counts> results = new Long2ObjectOpenHashMap<>();
+    private final Long2ObjectOpenHashMap<Scan> results = new Long2ObjectOpenHashMap<>();
     /** per flagged chunk: times (ms) of player-looking block changes near it */
     private final Long2ObjectOpenHashMap<LongArrayList> edits = new Long2ObjectOpenHashMap<>();
     private final LongArrayFIFOQueue queue = new LongArrayFIFOQueue();
@@ -68,7 +73,11 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
     private int ticks;
     private boolean settingsChanged;
 
-    /** One flagged chunk: chunk scan, 3x3 tunnels, branch mines, nearby caves, then the cave surfaces. */
+    /** Result for one flagged chunk: the counts, plus the structure zones (live edits inside them are ignored too). */
+    private record Scan(BaseEvidence.Counts counts, Evidence.Zones zones) {
+    }
+
+    /** One flagged chunk: chunk scan, 3x3 tunnels, branch mines, nearby caves, cave surfaces, then light. */
     private final class Job {
         final long key;
         final int cx, cz;
@@ -76,17 +85,24 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         final TunnelScanner tunnels;
         final TunnelScanner branches;
         final CaveScanner caves;
+        final boolean surfacesOn;
+        final boolean lightOn;
+        final int radius;
         CaveSurfaceScanner surfaces;
+        LightScanner light;
         int phase;
 
         Job(long key, LevelChunk chunk) {
             this.key = key;
             this.cx = ChunkPos.getX(key);
             this.cz = ChunkPos.getZ(key);
+            this.radius = caveRadius.getInt();
+            this.surfacesOn = scanCaves.get();
+            this.lightOn = detectLight.get();
             this.evidence = new BaseEvidence(reader, chunk, cx, cz, undergroundOnly.get());
             this.tunnels = countTunnels.get() ? new TunnelScanner(reader, cx, cz, 8) : null;
             this.branches = countBranchMines.get() ? new TunnelScanner(reader, cx, cz, BRANCH_MIN_LENGTH, 1, 2) : null;
-            this.caves = scanCaves.get() ? new CaveScanner(reader, cx, cz, caveRadius.getInt(), CAVE_MIN_SIZE) : null;
+            this.caves = surfacesOn || lightOn ? new CaveScanner(reader, cx, cz, radius, CAVE_MIN_SIZE) : null;
         }
 
         boolean step(long deadline) {
@@ -97,33 +113,60 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
                     case 2 -> branches == null || branches.step(deadline);
                     case 3 -> caves == null || caves.step(deadline);
                     case 4 -> {
-                        if (caves == null) yield true;
+                        if (!surfacesOn) yield true;
                         if (surfaces == null) surfaces = new CaveSurfaceScanner(reader, caves.results(), cx, cz);
                         yield surfaces.step(deadline);
+                    }
+                    case 5 -> {
+                        if (!lightOn) yield true;
+                        if (light == null) light = new LightScanner(reader, caves.results(), cx, cz, radius);
+                        yield light.step(deadline);
                     }
                     default -> true;
                 };
                 if (!done) return false;
-                if (++phase > 4) return true;
+                if (++phase > 5) return true;
                 if (System.nanoTime() > deadline) return false;
             }
         }
 
-        BaseEvidence.Counts counts() {
+        Scan finish() {
+            Evidence.Zones zones = Evidence.zones(evidence.evidence(), surfaces == null ? null : surfaces.evidence());
+            int[] ignored = new int[1];
+            int[] chunkCounts = evidence.evidence().count(zones, ignored);
+            int[] caveCounts = surfaces == null ? new int[BaseEvidence.KINDS] : surfaces.evidence().count(zones, ignored);
+            int tunnelCount = countTunnels(tunnels, zones, ignored);
+            int branchCount = countTunnels(branches, zones, ignored);
+            int hiddenLight = 0;
+            if (light != null) {
+                for (int i = 0; i < light.results().size(); i++) {
+                    if (zones.contains(light.results().getLong(i))) ignored[0]++;
+                    else hiddenLight++;
+                }
+            }
             LongSet finder = SusChunks.finder();
             LongSet better = SusChunks.better();
-            return new BaseEvidence.Counts(
-                    evidence.counts(),
-                    surfaces == null ? new int[evidence.counts().length] : surfaces.counts(),
-                    tunnels == null ? 0 : tunnels.results().size(),
-                    branches == null ? 0 : branches.results().size(),
-                    finder.contains(key) && better.contains(key));
+            BaseEvidence.Counts counts = new BaseEvidence.Counts(chunkCounts, caveCounts, tunnelCount, branchCount,
+                    hiddenLight, ignored[0], finder.contains(key) && better.contains(key));
+            return new Scan(counts, zones);
         }
     }
 
+    /** stronghold corridors and trial chamber halls are exactly 3 wide, so tunnels inside structures don't count */
+    private static int countTunnels(TunnelScanner scanner, Evidence.Zones zones, int[] ignored) {
+        if (scanner == null) return 0;
+        int n = 0;
+        for (Tunnel t : scanner.results()) {
+            AABB b = t.box();
+            if (zones.contains((int) b.getCenter().x, (int) b.minY, (int) b.getCenter().z)) ignored[0]++;
+            else n++;
+        }
+        return n;
+    }
+
     public BaseFinder() {
-        super("Base Finder", "Shows the % chance there's a base under each flagged sus chunk, from what's under it, the caves around it and live block changes.", ExavAddon.CATEGORY);
-        caveRadius.visibleWhen(scanCaves::get);
+        super("Base Finder", "Shows the % chance there's a base under each flagged sus chunk, from what's under it, the caves and light around it and live block changes.", ExavAddon.CATEGORY);
+        caveRadius.visibleWhen(() -> scanCaves.get() || detectLight.get());
         liveWindow.visibleWhen(liveEdits::get);
         Runnable rescan = () -> settingsChanged = true;
         source.onChange(rescan);
@@ -132,6 +175,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         countBranchMines.onChange(rescan);
         scanCaves.onChange(rescan);
         caveRadius.onChange(rescan);
+        detectLight.onChange(rescan);
     }
 
     @Override
@@ -194,7 +238,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
                 current = new Job(key, chunk);
             }
             if (current.step(deadline)) {
-                results.put(current.key, current.counts());
+                results.put(current.key, current.finish());
                 current = null;
             }
         }
@@ -216,7 +260,10 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         for (int dx = -r; dx <= r; dx++) {
             for (int dz = -r; dz <= r; dz++) {
                 long key = ChunkPos.asLong(ecx + dx, ecz + dz);
-                if (flagged.contains(key)) edits.computeIfAbsent(key, k -> new LongArrayList()).add(now);
+                if (!flagged.contains(key)) continue;
+                Scan scan = results.get(key);
+                if (scan != null && scan.zones().contains(pos.getX(), pos.getY(), pos.getZ())) continue;
+                edits.computeIfAbsent(key, k -> new LongArrayList()).add(now);
             }
         }
     }
@@ -254,7 +301,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             LongArrayList times = edits.get(key);
             int liveCount = times == null ? 0 : times.size();
             int ago = liveCount == 0 ? 0 : (int) ((now - times.getLong(liveCount - 1)) / 60_000L);
-            BaseEvidence.Result r = BaseEvidence.score(entry.getValue(), liveCount, ago);
+            BaseEvidence.Result r = BaseEvidence.score(entry.getValue().counts(), liveCount, ago);
             if (r.percent() < hideBelow) continue;
 
             float[] screen = WorldLabel.project(mc, pos, screenW, screenH);

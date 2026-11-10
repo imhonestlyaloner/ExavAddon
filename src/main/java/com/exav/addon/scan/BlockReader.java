@@ -3,6 +3,7 @@ package com.exav.addon.scan;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.EmptyLevelChunk;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -69,6 +70,16 @@ public final class BlockReader {
         if (chunk == null) return null;
         pos.set(x, y, z);
         return chunk.getBlockState(pos);
+    }
+
+    /** Block light (0-15) the client has for this position. */
+    public int blockLight(int x, int y, int z) {
+        pos.set(x, y, z);
+        return level.getBrightness(LightLayer.BLOCK, pos);
+    }
+
+    public ClientLevel level() {
+        return level;
     }
 
     public boolean open(int x, int y, int z) {
