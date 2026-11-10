@@ -212,7 +212,8 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         if (level == null) return;
         ticks++;
 
-        flagged = SusChunks.flagged(source.get());
+        // unfiltered: Sus Chunk Confidence uses Base Finder's % to decide, so Base Finder has to see every flag
+        flagged = SusChunks.flaggedRaw(source.get());
         for (LongIterator it = results.keySet().iterator(); it.hasNext(); ) {
             if (!flagged.contains(it.nextLong())) it.remove();
         }
@@ -298,6 +299,19 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
         }
     }
 
+    private BaseEvidence.Result resultFor(long key, Scan scan, long now) {
+        LongArrayList times = edits.get(key);
+        int liveCount = times == null ? 0 : times.size();
+        int ago = liveCount == 0 ? 0 : (int) ((now - times.getLong(liveCount - 1)) / 60_000L);
+        return BaseEvidence.score(scan.counts(), liveCount, ago, items.get(key));
+    }
+
+    /** Base % for a flagged chunk, or -1 if it hasn't been scanned yet. */
+    public int percentFor(long chunkKey) {
+        Scan scan = results.get(chunkKey);
+        return scan == null ? -1 : resultFor(chunkKey, scan, System.currentTimeMillis()).percent();
+    }
+
     @Override
     public boolean isHudOverlayEnabled() {
         return isEnabled() && !results.isEmpty() && Minecraft.getInstance().level != null;
@@ -318,10 +332,7 @@ public final class BaseFinder extends ClientModule implements HudOverlayProvider
             double dx = pos.x - eye.x, dz = pos.z - eye.z;
             if (dx * dx + dz * dz > maxSq) continue;
 
-            LongArrayList times = edits.get(key);
-            int liveCount = times == null ? 0 : times.size();
-            int ago = liveCount == 0 ? 0 : (int) ((now - times.getLong(liveCount - 1)) / 60_000L);
-            BaseEvidence.Result r = BaseEvidence.score(entry.getValue().counts(), liveCount, ago, items.get(key));
+            BaseEvidence.Result r = resultFor(key, entry.getValue(), now);
             if (r.percent() < hideBelow) continue;
 
             float[] screen = WorldLabel.project(mc, pos, screenW, screenH);
