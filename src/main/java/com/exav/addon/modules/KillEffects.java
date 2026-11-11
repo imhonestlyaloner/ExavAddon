@@ -17,6 +17,7 @@ import net.anubis.client.event.impl.TickEvent;
 import net.anubis.client.module.ClientModule;
 import net.anubis.client.module.setting.ActionSetting;
 import net.anubis.client.module.setting.BooleanSetting;
+import net.anubis.client.module.setting.ColorSetting;
 import net.anubis.client.module.setting.ModeSetting;
 import net.anubis.client.module.setting.NumberSetting;
 import net.anubis.client.module.setting.StringSetting;
@@ -39,7 +40,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Kill effects. "Yeat Bell": when you kill someone, a giant golden bell flies in and stops just above where they died,
- * rings (and swings round in a circle) when the bell sound in the "Get Busy" clip hits, then drops and lands with green fog rolling out from under it.
+ * rings (and swings round in a circle) when the bell sound in the "Get Busy" clip hits, then drops and lands with glowing green ripples spreading out from under it.
  * The clip is read from .minecraft/config/exav-addon/kill_effect.ogg (not shipped with the addon).
  */
 public final class KillEffects extends ClientModule {
@@ -63,7 +64,8 @@ public final class KillEffects extends ClientModule {
     private final NumberSetting hangHeight = addSetting("hang-height", new NumberSetting("Hang Height (blocks above them)", 2.5F, 0.0F, 15.0F).step(0.5F));
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.8F, 0.0F, 1.0F).step(0.05F));
     private final NumberSetting sync = addSetting("sync", new NumberSetting("Sync Offset (ms)", 0.0F, -400.0F, 400.0F).step(10.0F));
-    private final BooleanSetting greenFog = addSetting("green-fog", new BooleanSetting("Green Fog", true));
+    private final BooleanSetting greenFog = addSetting("green-fog", new BooleanSetting("Glow Ripples", true));
+    private final ColorSetting glowColor = addSetting("glow-color", new ColorSetting("Glow Color", 0xFF3BFF6A));
     private final BooleanSetting shake = addSetting("shake", new BooleanSetting("Landing Shake", true));
     private final StringSetting soundFile = addSetting("sound-file", new StringSetting("Sound File", "kill_effect.ogg"));
     private final ActionSetting test = addSetting("test", new ActionSetting("Test Effect", KillEffects::test));
@@ -88,6 +90,7 @@ public final class KillEffects extends ClientModule {
 
     public KillEffects() {
         super("Kill Effects", "Kill effects: a giant Yeat bell drops on whoever you kill, synced to the Get Busy clip.", ExavAddon.CATEGORY);
+        glowColor.visibleWhen(greenFog::get);
     }
 
     static Path folder() {
@@ -373,37 +376,74 @@ public final class KillEffects extends ClientModule {
 
         if (t < LAND) return;
         float since = t - LAND;
-        // green shockwave across the ground
-        if (since < 0.8F) {
-            float r = h * (0.8F + 3.5F * since / 0.8F);
-            int a = (int) (150 * (1 - since / 0.8F));
+        // glowing green ripples spreading across the ground from the impact: a burst of rings on landing, then softer
+        // pulses while the bell sits there, all fading as it sinks
+        if (greenFog.get()) {
+            float fade = 1 - Math.max(0, Math.min(1, (t - SINK_AT) / (END - SINK_AT)));
             pose.pushPose();
-            pose.translate(x, y + 0.05F, z);
-            pose.scale(r, 0.08F, r);
-            collector.submitCustomGeometry(pose, glow, (p, out) -> puff.emit(p, out, bright, a << 24 | 0x3BFF6A));
+            pose.translate(x, y + 0.06F, z);
+            int color = glowColor.rgb() & 0xFFFFFF, core = mix(color, 0xFFFFFF, 0.4F); // rings: brighter along the middle
+            for (int i = 0; i < 4; i++) ripple(pose, collector, h, since - i * 0.22F, 1.8F, (i == 0 ? 1.0F : 0.8F) * fade, color, core);
+            for (float at = 1.3F; at < SINK_AT - LAND + 0.5F; at += 0.9F) ripple(pose, collector, h * 0.8F, since - at, 1.6F, 0.45F * fade, color, core);
+            // a soft glow on the ground right under the bell
+            float under = (0.35F + 0.65F * (float) Math.exp(-since * 3)) * fade;
+            ring(pose, collector, 0, h * 0.75F, h * 1.25F, color, under * 0.55F, color, 0);
             pose.popPose();
         }
-        // green fog rolling out from underneath and drifting up
-        if (greenFog.get() && since < SINK_AT - LAND + 1.0F) {
-            Random r = new Random(d.seed);
-            float fade = 1 - Math.max(0, Math.min(1, (t - SINK_AT) / 1.0F));
-            for (int i = 0; i < 26; i++) {
-                double ang = r.nextDouble() * Math.PI * 2;
-                float speed = 0.6F + 1.4F * r.nextFloat();
-                float out = (1 - (float) Math.exp(-since * 1.4F)) * speed * h * 0.6F + h * 0.45F;
-                float rise = since * (0.25F + 0.35F * r.nextFloat()) * h * 0.25F;
-                float px = x + (float) Math.cos(ang) * out, pz = z + (float) Math.sin(ang) * out, py = y + 0.3F + rise;
-                float s = h * (0.25F + 0.25F * r.nextFloat()) * (0.6F + Math.min(1, since * 1.5F));
-                int a = (int) (95 * fade * Math.min(1, since * 4) * (0.6F + 0.4F * r.nextFloat()));
-                int col = r.nextBoolean() ? 0x2FE05A : 0x7CFF9A;
-                pose.pushPose();
-                pose.translate(px, py, pz);
-                pose.scale(s, s * 0.7F, s);
-                collector.submitCustomGeometry(pose, glow, (p, o) -> puff.emit(p, o, bright, a << 24 | col));
-                pose.popPose();
-            }
-        }
         if (shake.get() && since < 0.05F) ArtistEggs.kick(0.9F);
+    }
+
+    /** one ripple ring: grows fast then slows, thins out and fades over its life */
+    private static void ripple(PoseStack pose, SubmitNodeCollector collector, float h, float age, float life, float strength, int color, int core) {
+        if (age < 0 || age > life || strength <= 0.01F) return;
+        float u = age / life;
+        float r = h * (0.5F + 3.4F * (1 - (float) Math.exp(-age * 1.9F)));
+        float w = h * 0.2F * (1 - 0.55F * u);
+        float a = strength * (float) Math.pow(1 - u, 1.4) * Math.min(1, age * 12);
+        ring(pose, collector, r - w, r, r + w, color, 0, core, a);
+    }
+
+    /**
+     * A flat glowing ring (added light) lying on the ground: transparent at the inner and outer edge, brightest along
+     * the middle radius - drawn both ways round so it shows from above and below.
+     */
+    private static void ring(PoseStack pose, SubmitNodeCollector collector, float inner, float middle, float outer, int edgeColor, float edgeAlpha,
+                             int midColor, float midAlpha) {
+        int edge = argb(edgeColor, edgeAlpha), mid = argb(midColor, midAlpha);
+        final int segments = 72;
+        collector.submitCustomGeometry(pose, RenderTypes.lightning(), (p, out) -> {
+            for (int i = 0; i < segments; i++) {
+                double a0 = Math.PI * 2 * i / segments, a1 = Math.PI * 2 * (i + 1) / segments;
+                float c0 = (float) Math.cos(a0), s0 = (float) Math.sin(a0), c1 = (float) Math.cos(a1), s1 = (float) Math.sin(a1);
+                float[][] bands = {{inner, middle}, {middle, outer}};
+                int[][] colors = {{edge, mid}, {mid, edge}};
+                for (int k = 0; k < 2; k++) {
+                    float ra = bands[k][0], rb = bands[k][1];
+                    int ca = colors[k][0], cb = colors[k][1];
+                    // top side
+                    out.addVertex(p, c0 * ra, 0, s0 * ra).setColor(ca);
+                    out.addVertex(p, c0 * rb, 0, s0 * rb).setColor(cb);
+                    out.addVertex(p, c1 * rb, 0, s1 * rb).setColor(cb);
+                    out.addVertex(p, c1 * ra, 0, s1 * ra).setColor(ca);
+                    // underside
+                    out.addVertex(p, c1 * ra, 0, s1 * ra).setColor(ca);
+                    out.addVertex(p, c1 * rb, 0, s1 * rb).setColor(cb);
+                    out.addVertex(p, c0 * rb, 0, s0 * rb).setColor(cb);
+                    out.addVertex(p, c0 * ra, 0, s0 * ra).setColor(ca);
+                }
+            }
+        });
+    }
+
+    private static int mix(int a, int b, float t) {
+        int r = (int) (((a >> 16) & 255) * (1 - t) + ((b >> 16) & 255) * t);
+        int g = (int) (((a >> 8) & 255) * (1 - t) + ((b >> 8) & 255) * t);
+        int bl = (int) ((a & 255) * (1 - t) + (b & 255) * t);
+        return r << 16 | g << 8 | bl;
+    }
+
+    private static int argb(int rgb, float alpha) {
+        return Math.round(Math.max(0, Math.min(1, alpha)) * 255) << 24 | (rgb & 0xFFFFFF);
     }
 
     private static int brighten(int argb, float k) {
