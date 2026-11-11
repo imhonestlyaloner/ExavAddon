@@ -1,6 +1,7 @@
 package com.exav.addon.modules;
 
 import com.exav.addon.ExavAddon;
+import com.exav.addon.video.WindowCapture;
 import com.mojang.blaze3d.platform.NativeImage;
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -40,6 +41,12 @@ public final class VideoPlayer extends ClientModule {
     private static final Logger LOGGER = LoggerFactory.getLogger("Exav Addon");
     private static final Identifier TEXTURE = Identifier.fromNamespaceAndPath("exav-addon", "dynamic/video_player");
 
+    private final ModeSetting mode = addSetting("mode", new ModeSetting("Source", "Window Capture", "Window Capture", "File / Link"));
+    private final StringSetting windowTitle = addSetting("window", new StringSetting("Window Title Contains", "YouTube"));
+    private final NumberSetting cropTop = addSetting("crop-top", new NumberSetting("Crop Top (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
+    private final NumberSetting cropBottom = addSetting("crop-bottom", new NumberSetting("Crop Bottom (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
+    private final NumberSetting cropLeft = addSetting("crop-left", new NumberSetting("Crop Left (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
+    private final NumberSetting cropRight = addSetting("crop-right", new NumberSetting("Crop Right (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
     private final StringSetting source = addSetting("source", new StringSetting("Video (file path or link)", ""));
     private final ModeSetting resolution = addSetting("resolution", new ModeSetting("Resolution", "360p", "144p", "240p", "360p", "480p", "720p", "1080p"));
     private final ModeSetting fps = addSetting("fps", new ModeSetting("Frame Rate", "30", "15", "24", "30", "60"));
@@ -69,7 +76,20 @@ public final class VideoPlayer extends ClientModule {
     private float startX, startY, startW;
 
     public VideoPlayer() {
-        super("Video Player", "Plays a video file or direct video link (via ffmpeg) as a movable, resizable overlay.", ExavAddon.CATEGORY);
+        super("Video Player", "Shows a window (like YouTube in your browser) or plays a video file / direct link as a movable, resizable overlay.", ExavAddon.CATEGORY);
+        windowTitle.visibleWhen(this::capturing);
+        cropTop.visibleWhen(this::capturing);
+        cropBottom.visibleWhen(this::capturing);
+        cropLeft.visibleWhen(this::capturing);
+        cropRight.visibleWhen(this::capturing);
+        source.visibleWhen(() -> !capturing());
+        volume.visibleWhen(() -> !capturing());
+        loop.visibleWhen(() -> !capturing());
+        ffmpegPath.visibleWhen(() -> !capturing());
+    }
+
+    private boolean capturing() {
+        return "Window Capture".equals(mode.get());
     }
 
     @Override
@@ -90,6 +110,10 @@ public final class VideoPlayer extends ClientModule {
 
     private synchronized void start() {
         stop();
+        if (capturing()) {
+            startCapture();
+            return;
+        }
         String src = source.get().trim();
         if (src.isEmpty()) {
             status = "Set a video file path or link in the settings";
@@ -97,7 +121,7 @@ public final class VideoPlayer extends ClientModule {
         }
         String lower = src.toLowerCase(Locale.ROOT);
         if (lower.contains("youtube.com") || lower.contains("youtu.be")) {
-            status = "YouTube links aren't supported - use a video file or a direct video link";
+            status = "For YouTube: play it in your browser and set Source to Window Capture";
             return;
         }
         frameH = frameHeight();
@@ -141,6 +165,62 @@ public final class VideoPlayer extends ClientModule {
         processes.clear();
         frame = null;
         status = "";
+    }
+
+    // ---------------------------------------------------------------- window capture (e.g. YouTube in a browser)
+
+    private void startCapture() {
+        if (!WindowCapture.supported()) {
+            status = "Window Capture only works on Windows";
+            return;
+        }
+        frameH = frameHeight();
+        frameW = Math.round(frameH * 16 / 9.0F / 2) * 2;
+        int w = frameW, h = frameH;
+        long frameMs = Math.max(5, 1000 / Integer.parseInt(fps.get()));
+        running = true;
+        status = "Looking for a window with \"" + windowTitle.get().trim() + "\" in its title...";
+        videoThread = new Thread(() -> {
+            WindowCapture capture = new WindowCapture();
+            byte[] a = new byte[w * h * 4], b = new byte[w * h * 4];
+            boolean useA = true;
+            long lastFind = 0;
+            try {
+                while (running) {
+                    long t0 = System.currentTimeMillis();
+                    boolean ok = false;
+                    try {
+                        byte[] target = useA ? a : b;
+                        ok = capture.grab(target, w, h, cropLeft.get() / 100, cropTop.get() / 100, cropRight.get() / 100, cropBottom.get() / 100);
+                        if (ok) {
+                            frame = target;
+                            frameNumber++;
+                            useA = !useA;
+                            status = "";
+                        }
+                    } catch (Throwable e) {
+                        LOGGER.debug("Window capture failed", e);
+                    }
+                    if (!ok) {
+                        frame = null;
+                        if (t0 - lastFind > 1500) { // window closed / not found yet -> look again
+                            lastFind = t0;
+                            capture.release();
+                            String want = windowTitle.get().trim();
+                            status = capture.find(want) ? "Window is minimized - restore it (it can stay behind Minecraft)"
+                                    : "No window with \"" + want + "\" in its title - open the video in your browser";
+                        }
+                    }
+                    long sleep = frameMs - (System.currentTimeMillis() - t0);
+                    if (sleep > 0) Thread.sleep(sleep);
+                }
+            } catch (InterruptedException ignored) {
+            } finally {
+                capture.release();
+            }
+        }, "Exav window capture");
+        videoThread.setDaemon(true);
+        videoThread.start();
     }
 
     private void readVideo(InputStream in, int w, int h) {

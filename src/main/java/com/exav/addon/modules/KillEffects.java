@@ -71,6 +71,7 @@ public final class KillEffects extends ClientModule {
     private final Int2LongOpenHashMap hitAt = new Int2LongOpenHashMap();
     private final IntOpenHashSet counted = new IntOpenHashSet();
     private OggClip clip;
+    private int ticks;
     private String clipName = "";
 
     private static SmoothMesh bell, clapper, puff;
@@ -145,7 +146,32 @@ public final class KillEffects extends ClientModule {
         }
         if (counted.size() > 256) counted.clear();
         drops.removeIf(d -> (System.nanoTime() - d.start) / 1.0E9F > END + 0.5F);
-        if (clip != null) clip.cleanup();
+        if (ticks++ % 20 == 0) { // keep the clip decoded and ready, so it starts in sync with the bell
+            OggClip c = clip();
+            if (c != null) c.preload();
+        }
+    }
+
+    private boolean warned;
+
+    /** the clip to play: the file named in Sound File, or else the first .ogg in the folder */
+    private OggClip clip() {
+        String name = soundFile.get().trim();
+        java.nio.file.Path file = folder().resolve(name);
+        if (!java.nio.file.Files.isRegularFile(file)) {
+            try (var list = java.nio.file.Files.list(folder())) {
+                file = list.filter(f -> f.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".ogg")).sorted().findFirst().orElse(null);
+            } catch (Exception e) {
+                file = null;
+            }
+            if (file == null) return null;
+        }
+        String key = file.toString();
+        if (clip == null || !key.equals(clipName)) {
+            clip = new OggClip(file);
+            clipName = key;
+        }
+        return clip;
     }
 
     private void start(Vec3 at) {
@@ -156,16 +182,13 @@ public final class KillEffects extends ClientModule {
         for (int i = 0; i < 6 && mc.level.getBlockState(p.below()).isAir(); i++) p = p.below();
         floor = p.getY();
         drops.add(new Drop(new Vec3(at.x, floor, at.z), System.nanoTime(), drops.size() * 31 + (int) (System.nanoTime() & 1023)));
-        String name = soundFile.get().trim();
-        if (clip == null || !name.equals(clipName)) {
-            clip = new OggClip(folder().resolve(name));
-            clipName = name;
-        }
-        if (clip.exists()) {
-            float master = mc.options.getSoundSourceVolume(SoundSource.MASTER);
-            clip.play(volume.get() * master);
-        } else {
-            LOGGER.info("Kill effect sound not found: put {} in {}", name, folder());
+        OggClip c = clip();
+        if (c != null) {
+            c.play(volume.get()); // the game's Master volume is applied on top
+        } else if (mc.player != null && !warned) {
+            warned = true;
+            mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                    "\u00a7d[Exav]\u00a7r Kill Effects has no sound: put " + soundFile.get().trim() + " in " + folder().toAbsolutePath()), false);
         }
     }
 

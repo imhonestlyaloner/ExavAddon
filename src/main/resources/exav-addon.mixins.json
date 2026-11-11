@@ -8,6 +8,8 @@
     "ItemModelResolverGlintMixin",
     "ItemStackRenderStateGlintMixin",
     "AbstractClientPlayerCapeMixin",
+    "RenderBuffersGlintMixin",
+    "SoundBufferLibraryMixin",
     "AtmosphereModuleMixin",
     "FogRendererTintMixin",
     "GameRendererImpactMixin",
