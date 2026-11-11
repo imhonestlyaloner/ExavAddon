@@ -65,6 +65,8 @@ public final class KillEffects extends ClientModule {
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.8F, 0.0F, 1.0F).step(0.05F));
     private final NumberSetting sync = addSetting("sync", new NumberSetting("Sync Offset (ms)", 0.0F, -400.0F, 400.0F).step(10.0F));
     private final BooleanSetting greenFog = addSetting("green-fog", new BooleanSetting("Glow Ripples", true));
+    private final ModeSetting bellMetal = addSetting("bell-metal", new ModeSetting("Bell Metal", "Gold", "Gold", "Bronze", "Dark Iron", "Random", "Custom"));
+    private final ColorSetting customMetal = addSetting("custom-metal", new ColorSetting("Custom Metal Color", 0xFFC0C8D0));
     private final ColorSetting glowColor = addSetting("glow-color", new ColorSetting("Glow Color", 0xFF3BFF6A));
     private final BooleanSetting shake = addSetting("shake", new BooleanSetting("Landing Shake", true));
     private final StringSetting soundFile = addSetting("sound-file", new StringSetting("Sound File", "kill_effect.ogg"));
@@ -91,6 +93,7 @@ public final class KillEffects extends ClientModule {
     public KillEffects() {
         super("Kill Effects", "Kill effects: a giant Yeat bell drops on whoever you kill, synced to the Get Busy clip.", ExavAddon.CATEGORY);
         glowColor.visibleWhen(greenFog::get);
+        customMetal.visibleWhen(() -> bellMetal.is("Custom"));
     }
 
     static Path folder() {
@@ -355,13 +358,22 @@ public final class KillEffects extends ClientModule {
         if (circle > 0.001F) pose.mulPose(new Quaternionf().rotationAxis(circle, (float) Math.cos(circleAngle), 0, (float) Math.sin(circleAngle)));
         pose.mulPose(new Quaternionf().rotationY(yaw).rotateX(swing));
         pose.scale(scale, scale, scale);
-        int gold = 0xFFD9A93C;
-        int tint = glint > 0.02F ? brighten(gold, glint * 0.6F) : gold;
+        // the same metals as the Yeat sky bells (Random picks one per kill)
+        int[] metals = {0xFFD9A93C, 0xFFB0703A, 0xFF50555C};
+        int metal = switch (bellMetal.get()) {
+            case "Bronze" -> metals[1];
+            case "Dark Iron" -> metals[2];
+            case "Random" -> metals[Math.floorMod(d.seed, metals.length)];
+            case "Custom" -> 0xFF000000 | customMetal.rgb();
+            default -> metals[0];
+        };
+        int clapperColor = 0xFF000000 | mix(metal & 0xFFFFFF, 0x000000, 0.4F); // the clapper: a darker cast of the same metal
+        int tint = glint > 0.02F ? brighten(metal, glint * 0.6F) : metal;
         collector.submitCustomGeometry(pose, solid, (p, out) -> bell.emit(p, out, light, tint));
         pose.pushPose();
         pose.translate(0, -2.2F, 0);
         pose.mulPose(new Quaternionf().rotationX(clap));
-        collector.submitCustomGeometry(pose, solid, (p, out) -> clapper.emit(p, out, light, 0xFF8A6A2A));
+        collector.submitCustomGeometry(pose, solid, (p, out) -> clapper.emit(p, out, light, clapperColor));
         pose.popPose();
         if (glint > 0.03F) { // a bright flash off the metal on each ding
             pose.pushPose();
