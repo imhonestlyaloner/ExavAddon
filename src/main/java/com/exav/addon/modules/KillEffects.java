@@ -38,8 +38,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Kill effects. "Yeat Bell": when you kill someone, a giant golden bell appears high in the sky over the spot and rings
- * on each bell hit of the "Get Busy" clip, then drops after the last one and lands with green fog rolling out from under it.
+ * Kill effects. "Yeat Bell": when you kill someone, a giant golden bell flies in and stops 7 blocks above where they
+ * died, rings when the bell sound in the "Get Busy" clip hits, then drops and lands with green fog rolling out from under it.
  * The clip is read from .minecraft/config/exav-addon/kill_effect.ogg (not shipped with the addon).
  */
 public final class KillEffects extends ClientModule {
@@ -47,10 +47,15 @@ public final class KillEffects extends ClientModule {
     private static volatile KillEffects active;
     private static final Identifier WHITE = Identifier.fromNamespaceAndPath("anubis", "textures/misc/knife_base.png");
 
-    /** bell hits in the clip (seconds), found by looking for bell-like (sustained, bright) note starts; LAND is the big one */
-    static final float[] HITS = {0.209F, 0.511F, 1.312F, 1.533F, 1.916F, 2.403F, 2.612F, 3.251F, 4.098F};
-    /** the bell hangs in the sky ringing on every hit, then drops right after the last one */
-    static final float APPEAR = 0.2F, DROP_AT = 4.30F, LAND = 4.85F, SINK_AT = 7.4F, END = 8.4F, HANG_HEIGHT = 18.0F;
+    /**
+     * The bell sound in the clip (seconds): right after "this song was already turnt but here's a bell" (1:33.08 in
+     * the song). Found by its own pitch (~1227 Hz), which is silent before and rings out after it.
+     */
+    static final float[] HITS = {4.08F};
+    /** flies in and stops 7 blocks above where they died, hangs still until the bell sound, then drops */
+    static final float FLY_IN = 1.3F, DROP_AT = 4.32F, LAND = 4.72F, SINK_AT = 7.4F, END = 8.4F, HANG_HEIGHT = 7.0F;
+    /** how far off (sideways and up) the bell starts its flight */
+    static final float FLY_DISTANCE = 34.0F, FLY_RISE = 22.0F;
 
     private final ModeSetting effect = addSetting("effect", new ModeSetting("Effect", "Yeat Bell", "Yeat Bell"));
     private final BooleanSetting playersOnly = addSetting("players-only", new BooleanSetting("Players Only", true));
@@ -63,7 +68,8 @@ public final class KillEffects extends ClientModule {
     private final ActionSetting test = addSetting("test", new ActionSetting("Test Effect", KillEffects::test));
     private final ActionSetting openFolder = addSetting("open-folder", new ActionSetting("Open Sound Folder", KillEffects::openFolder));
 
-    private record Drop(Vec3 pos, long start, int seed) {
+    /** pos = ground under the spot, hang = height above that ground where the bell stops (7 above the death point) */
+    private record Drop(Vec3 pos, float hang, long start, int seed) {
     }
 
     private final List<Drop> drops = new ArrayList<>();
@@ -250,7 +256,7 @@ public final class KillEffects extends ClientModule {
         int floor = p.getY();
         for (int i = 0; i < 6 && mc.level.getBlockState(p.below()).isAir(); i++) p = p.below();
         floor = p.getY();
-        drops.add(new Drop(new Vec3(at.x, floor, at.z), System.nanoTime(), drops.size() * 31 + (int) (System.nanoTime() & 1023)));
+        drops.add(new Drop(new Vec3(at.x, floor, at.z), (float) (at.y - floor) + HANG_HEIGHT, System.nanoTime(), drops.size() * 31 + (int) (System.nanoTime() & 1023)));
         OggClip c = clip();
         if (c != null) {
             c.play(volume.get()); // the game's Master volume is applied on top
@@ -287,17 +293,23 @@ public final class KillEffects extends ClientModule {
         float h = bellSize.get();
         float scale = h / 10.0F;
         RenderType solid = RenderTypes.entityCutoutNoCull(WHITE), glow = RenderTypes.entityTranslucent(WHITE);
-        // height of the bell's bottom above the ground: slides into view up high, hangs there ringing, then drops
-        // (speeding up) after the last ring, lands with a bounce, and sinks at the end
-        float lift;
-        if (t < APPEAR) {
-            float u = 1 - t / APPEAR;
-            lift = HANG_HEIGHT + 12 * u * u;
+        // where the bell is: flies in from far off and high up, slowing to a stop 7 blocks above the death point,
+        // hangs there until the bell sound, then drops (speeding up), lands with a bounce, and sinks at the end
+        float lift, offX = 0, offZ = 0, tilt = 0;
+        double flyAngle = d.seed * 2.399; // a different direction for each kill
+        if (t < FLY_IN) {
+            float u = t / FLY_IN, left = (1 - u) * (1 - u) * (1 - u); // eases out to a stop
+            lift = d.hang + FLY_RISE * left;
+            offX = (float) Math.cos(flyAngle) * FLY_DISTANCE * left;
+            offZ = (float) Math.sin(flyAngle) * FLY_DISTANCE * left;
+            tilt = 0.35F * (1 - u) * (1 - u); // leans into the flight, then straightens up
         } else if (t < DROP_AT) {
-            lift = HANG_HEIGHT + 0.35F * (float) Math.sin((t - APPEAR) * 2.2F); // gentle bob while it rings
+            float since = t - FLY_IN;
+            lift = d.hang;
+            tilt = -0.12F * (float) Math.exp(-since * 2.2F) * (float) Math.sin(since * 6.5F); // settles after stopping
         } else if (t < LAND) {
             float u = (t - DROP_AT) / (LAND - DROP_AT);
-            lift = (HANG_HEIGHT + 0.35F * (float) Math.sin((DROP_AT - APPEAR) * 2.2F)) * (1 - u * u);
+            lift = d.hang * (1 - u * u);
         } else if (t < SINK_AT) {
             float since = t - LAND;
             lift = -0.15F * h * (float) Math.exp(-since * 9) * (float) Math.sin(since * 24); // a small bounce on landing
@@ -305,20 +317,26 @@ public final class KillEffects extends ClientModule {
         } else {
             lift = -h * Math.min(1, (t - SINK_AT) / (END - SINK_AT)); // sinks into the ground
         }
-        // swing and glint from every bell hit so far (alternating directions)
-        float swing = 0, clap = 0, glint = 0;
-        for (int i = 0; i <= HITS.length; i++) {
-            float at = i < HITS.length ? HITS[i] : LAND; // the landing knocks it like one more hit
-            float since = t - at;
-            if (since < 0) continue;
-            float strength = i >= HITS.length - 1 ? 1.0F : 0.7F;
+        // the clapper only moves for the bell sound: it swings out and hits the side exactly on the sound, then
+        // bounces off and settles; the bell rocks and flashes from the hit
+        float swing = tilt, clap = 0, glint = 0;
+        final float windUp = 0.14F, wall = 0.42F;
+        for (int i = 0; i < HITS.length; i++) {
+            float since = t - HITS[i];
             float sign = i % 2 == 0 ? 1 : -1;
-            swing += sign * 0.22F * strength * (float) Math.exp(-since * 2.5F) * (float) Math.sin(since * 7);
-            clap += -sign * 0.5F * strength * (float) Math.exp(-since * 3.5F) * (float) Math.sin(since * 11 + 0.6F);
-            glint = Math.max(glint, strength * (float) Math.exp(-since * 6));
+            if (since < -windUp) continue;
+            if (since < 0) {
+                float u = (since + windUp) / windUp;
+                clap += sign * wall * u * u; // speeding up toward the wall
+                continue;
+            }
+            clap += sign * wall * (float) Math.exp(-since * 4.5F) * (float) Math.cos(since * 13);
+            swing += -sign * 0.2F * (float) Math.exp(-since * 2.2F) * (float) Math.sin(since * 7);
+            glint = Math.max(glint, (float) Math.exp(-since * 6));
         }
+        if (t >= LAND) glint = Math.max(glint, 0.6F * (float) Math.exp(-(t - LAND) * 6)); // flash on landing (no clapper)
         clap = Math.max(-0.42F, Math.min(0.42F, clap));
-        float x = (float) (d.pos.x - cam.x), y = (float) (d.pos.y - cam.y), z = (float) (d.pos.z - cam.z);
+        float x = (float) (d.pos.x - cam.x) + offX, y = (float) (d.pos.y - cam.y), z = (float) (d.pos.z - cam.z) + offZ;
         int light = LevelRenderer.getLightColor(mc.level, BlockPos.containing(d.pos).above());
         int bright = 0xF000F0;
         float yaw = d.seed * 0.7F;
