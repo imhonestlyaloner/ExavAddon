@@ -9,7 +9,6 @@ import com.exav.addon.modules.HolidayKnife;
 import com.exav.addon.modules.KillEffects;
 import com.exav.addon.modules.SusChunkPlus;
 import com.exav.addon.modules.InspectCycle;
-import com.exav.addon.modules.VideoPlayer;
 import com.exav.addon.modules.VideoSkybox;
 import com.exav.addon.sky.AlwaysEggs;
 import com.exav.addon.util.MyEdits;
@@ -39,7 +38,6 @@ public final class ExavAddon extends AnubisAddon {
         ModuleRegistry.add(new ChestPreview());
         ModuleRegistry.add(new BetterGlint());
         ModuleRegistry.add(new KillEffects());
-        ModuleRegistry.add(new VideoPlayer());
         ModuleRegistry.add(new InspectCycle());
     }
 
