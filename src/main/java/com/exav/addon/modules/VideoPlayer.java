@@ -1,6 +1,7 @@
 package com.exav.addon.modules;
 
 import com.exav.addon.ExavAddon;
+import com.exav.addon.video.Tools;
 import com.exav.addon.video.WindowCapture;
 import com.mojang.blaze3d.platform.NativeImage;
 import java.io.DataInputStream;
@@ -57,8 +58,16 @@ public final class VideoPlayer extends ClientModule {
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.7F, 0.0F, 1.0F).step(0.05F));
     private final BooleanSetting loop = addSetting("loop", new BooleanSetting("Loop", true));
     private final BooleanSetting playOnEnable = addSetting("autoplay", new BooleanSetting("Play When Enabled", true));
-    private final StringSetting ffmpegPath = addSetting("ffmpeg", new StringSetting("FFmpeg Path", "ffmpeg"));
-    private final StringSetting ytdlpPath = addSetting("yt-dlp", new StringSetting("yt-dlp Path", "yt-dlp"));
+    private final StringSetting ffmpegPath = addSetting("ffmpeg", new StringSetting("FFmpeg Path (auto = downloaded by the addon)", "auto"));
+    private final StringSetting ytdlpPath = addSetting("yt-dlp", new StringSetting("yt-dlp Path (auto = downloaded by the addon)", "auto"));
+    private final ActionSetting updateYt = addSetting("update-yt", new ActionSetting("Update YouTube Support", () -> {
+        try {
+            Tools.forgetYtDlp();
+            status = "YouTube support will update the next time you press Play";
+        } catch (IOException e) {
+            status = "Couldn't update: " + e.getMessage();
+        }
+    }));
     private final ActionSetting play = addSetting("play", new ActionSetting("Play / Restart", this::start));
     private final ActionSetting stopAction = addSetting("stop", new ActionSetting("Stop", this::stop));
 
@@ -77,7 +86,7 @@ public final class VideoPlayer extends ClientModule {
     private float startX, startY, startW;
 
     public VideoPlayer() {
-        super("Video Player", "Plays a YouTube video, video link or file as a movable, resizable overlay (needs ffmpeg, and yt-dlp for YouTube).", ExavAddon.CATEGORY);
+        super("Video Player", "Plays a YouTube video, video link or file as a movable, resizable overlay.", ExavAddon.CATEGORY);
         windowTitle.visibleWhen(this::capturing);
         cropTop.visibleWhen(this::capturing);
         cropBottom.visibleWhen(this::capturing);
@@ -88,6 +97,7 @@ public final class VideoPlayer extends ClientModule {
         loop.visibleWhen(() -> !capturing());
         ffmpegPath.visibleWhen(() -> !capturing());
         ytdlpPath.visibleWhen(() -> !capturing());
+        updateYt.visibleWhen(() -> !capturing());
     }
 
     private boolean capturing() {
@@ -125,21 +135,32 @@ public final class VideoPlayer extends ClientModule {
         frameW = Math.round(frameH * 16 / 9.0F / 2) * 2;
         running = true;
         int session = ++playSession;
-        if (needsYtDlp(src)) {
-            status = "Getting the video from YouTube...";
-            Thread resolve = new Thread(() -> {
-                List<String> urls = resolveWithYtDlp(src, frameH);
+        status = "Loading...";
+        // everything below can take a while (first-time downloads, asking YouTube), so it runs off the game thread
+        Thread prepare = new Thread(() -> {
+            try {
+                String ffmpeg = Tools.ffmpeg(ffmpegPath.get(), this::setStatus);
+                List<String> inputs = List.of(src);
+                boolean network = src.startsWith("http");
+                if (needsYtDlp(src)) {
+                    inputs = resolveWithYtDlp(src, frameH, true);
+                    if (inputs == null) return;
+                }
                 synchronized (this) {
                     if (!running || session != playSession) return;
-                    if (urls != null) launch(urls, true);
+                    launch(ffmpeg, inputs, network);
                 }
-            }, "Exav yt-dlp");
-            resolve.setDaemon(true);
-            resolve.start();
-        } else {
-            status = "Loading...";
-            launch(List.of(src), src.startsWith("http"));
-        }
+            } catch (IOException e) {
+                if (running && session == playSession) status = "Couldn't get the video player ready: " + e.getMessage();
+                LOGGER.warn("Video player setup failed", e);
+            }
+        }, "Exav video setup");
+        prepare.setDaemon(true);
+        prepare.start();
+    }
+
+    private void setStatus(String text) {
+        if (running) status = text;
     }
 
     private volatile int playSession;
@@ -154,10 +175,16 @@ public final class VideoPlayer extends ClientModule {
     }
 
     /** asks yt-dlp for the stream address(es): one with picture + sound, or a picture one and a sound one */
-    private List<String> resolveWithYtDlp(String url, int height) {
+    private List<String> resolveWithYtDlp(String url, int height, boolean retry) throws IOException {
         String format = "bv*[height<=" + height + "][vcodec!^=av01]+ba/b[height<=" + height + "]/b";
+        String ytDlp = Tools.ytDlp(ytdlpPath.get(), this::setStatus);
+        String deno = Tools.deno(ytdlpPath.get(), this::setStatus);
+        setStatus("Getting the video from YouTube...");
         try {
-            Process p = new ProcessBuilder(ytdlpPath.get().trim(), "--no-playlist", "--no-warnings", "-f", format, "-g", url).start();
+            List<String> cmd = new ArrayList<>(List.of(ytDlp, "--no-playlist", "--no-warnings", "-f", format, "-g"));
+            if (deno != null) cmd.addAll(List.of("--js-runtimes", "deno:" + deno));
+            cmd.add(url);
+            Process p = new ProcessBuilder(cmd).start();
             synchronized (this) {
                 processes.add(p);
             }
@@ -166,6 +193,11 @@ public final class VideoPlayer extends ClientModule {
             p.waitFor();
             List<String> urls = new ArrayList<>();
             for (String line : out.split("\\R")) if (line.startsWith("http")) urls.add(line.trim());
+            if (urls.isEmpty() && retry && Tools.isAuto(ytdlpPath.get()) && running) {
+                // YouTube changes often: get the newest yt-dlp once and try again
+                Tools.forgetYtDlp();
+                return resolveWithYtDlp(url, height, false);
+            }
             if (urls.isEmpty()) {
                 String last = err.isEmpty() ? "no video found" : err.substring(err.lastIndexOf('\n') + 1);
                 if (running) status = "yt-dlp: " + (last.length() > 120 ? last.substring(0, 120) + "..." : last);
@@ -174,7 +206,7 @@ public final class VideoPlayer extends ClientModule {
             }
             return urls;
         } catch (IOException e) {
-            if (running) status = "Couldn't start yt-dlp - install it (winget install yt-dlp.yt-dlp) or set yt-dlp Path";
+            if (running) status = "Couldn't run yt-dlp: " + e.getMessage();
             return null;
         } catch (InterruptedException e) {
             return null;
@@ -185,10 +217,10 @@ public final class VideoPlayer extends ClientModule {
      * One ffmpeg plays everything: picture as raw RGBA frames on its normal output, sound as 16-bit PCM on its
      * second output (so both come from the same clock and stay in sync).
      */
-    private synchronized void launch(List<String> inputs, boolean network) {
+    private synchronized void launch(String ffmpeg, List<String> inputs, boolean network) {
         int rate = Integer.parseInt(fps.get());
         status = "Loading...";
-        List<String> cmd = new ArrayList<>(List.of(ffmpegPath.get().trim(), "-nostdin", "-hide_banner", "-nostats", "-loglevel", "quiet"));
+        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-hide_banner", "-nostats", "-loglevel", "quiet"));
         for (String in : inputs) {
             if (network) cmd.addAll(List.of("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"));
             if (loop.get()) cmd.addAll(List.of("-stream_loop", "-1"));
@@ -211,7 +243,7 @@ public final class VideoPlayer extends ClientModule {
             audioThread.start();
         } catch (IOException e) {
             running = false;
-            status = "Couldn't start ffmpeg - install it (winget install Gyan.FFmpeg) or set FFmpeg Path";
+            status = "Couldn't start ffmpeg: " + e.getMessage();
             LOGGER.warn("Couldn't start ffmpeg", e);
         }
     }
