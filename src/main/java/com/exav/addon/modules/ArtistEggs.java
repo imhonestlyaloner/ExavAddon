@@ -159,8 +159,17 @@ public final class ArtistEggs extends ClientModule {
     private final float[] shudder = new float[BELLS.length], glint = new float[BELLS.length];
     private final int[] swingDir = new int[BELLS.length];
 
+    // camera kick: set on a hit, fades out by itself over time (works even when this module is off)
     private static float shake, punch;
-    private static long shakeSeed;
+    private static long shakeSeed, kickedAt;
+
+    private static float shakeNow() {
+        return shake * (float) Math.exp(-(System.nanoTime() - kickedAt) / 1.0E9 * 9);
+    }
+
+    private static float punchNow() {
+        return punch * (float) Math.exp(-(System.nanoTime() - kickedAt) / 1.0E9 * 7);
+    }
 
     private int bellCount() {
         return Math.max(1, Math.min(BELLS.length, Math.round(4 * amount.get())));
@@ -171,8 +180,6 @@ public final class ArtistEggs extends ClientModule {
         long nowNs = System.nanoTime();
         float dt = lastFrame == 0 ? 0 : Math.min(0.1F, (nowNs - lastFrame) / 1.0E9F);
         lastFrame = nowNs;
-        shake *= (float) Math.exp(-dt * 9);
-        punch *= (float) Math.exp(-dt * 7);
         if (yeatLevel <= 0 || AlwaysEggs.christmas()) return; // Christmas takes over the sky
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return;
@@ -243,8 +250,10 @@ public final class ArtistEggs extends ClientModule {
         if (impact.get() && yeatLevel > 0.5F) {
             // nearer, bigger bells hit harder
             float near = BELLS[bell][3] / (BELLS[bell][2] * 60.0F);
-            shake = Math.min(1.5F, shake + 0.55F * near * impactStrength.get());
-            punch = Math.min(1.0F, punch + 0.5F * near * impactStrength.get());
+            float s0 = shakeNow(), p0 = punchNow();
+            shake = Math.min(1.5F, s0 + 0.55F * near * impactStrength.get());
+            punch = Math.min(1.0F, p0 + 0.5F * near * impactStrength.get());
+            kickedAt = System.nanoTime();
             shakeSeed = e;
         }
         if (bellSounds.get() && yeatLevel > 0.5F) {
@@ -360,11 +369,21 @@ public final class ArtistEggs extends ClientModule {
 
     // ---------------------------------------------------------------- camera kick on big hits (called from mixins)
 
+    /** a camera kick from somewhere else (kill effect bell landing) */
+    public static void kick(float amount) {
+        float s0 = shakeNow(), p0 = punchNow();
+        shake = Math.min(1.5F, s0 + amount);
+        punch = Math.min(1.0F, p0 + amount * 0.6F);
+        kickedAt = System.nanoTime();
+        shakeSeed = kickedAt & 0xFFFF;
+    }
+
     /** a short, sharp camera shake */
     public static void cameraShake(PoseStack pose) {
-        if (active == null || shake < 0.005F) return;
+        float now = shakeNow();
+        if (now < 0.005F) return;
         float t = System.nanoTime() / 1.0E9F;
-        float a = shake * 1.6F;
+        float a = now * 1.6F;
         pose.mulPose(new Quaternionf().rotationXYZ(
                 (float) Math.toRadians(a * Math.sin(t * 47 + shakeSeed)),
                 (float) Math.toRadians(a * 0.6F * Math.sin(t * 53 + shakeSeed * 3)),
@@ -373,8 +392,9 @@ public final class ArtistEggs extends ClientModule {
 
     /** a quick zoom punch: narrows the field of view for a moment */
     public static float fov(float fov) {
-        if (active == null || punch < 0.005F) return fov;
-        return fov * (1.0F - 0.07F * punch);
+        float now = punchNow();
+        if (now < 0.005F) return fov;
+        return fov * (1.0F - 0.07F * now);
     }
 
     /** tiny easing helper */

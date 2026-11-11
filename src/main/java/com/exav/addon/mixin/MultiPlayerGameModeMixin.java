@@ -20,8 +20,15 @@ public abstract class MultiPlayerGameModeMixin {
         MyEdits.broke(pos);
     }
 
+    @Inject(method = "attack", at = @At("HEAD"))
+    private void exav$onAttack(net.minecraft.world.entity.player.Player player, net.minecraft.world.entity.Entity target,
+                               org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        com.exav.addon.modules.KillEffects.attacked(target);
+    }
+
     @Inject(method = "useItemOn", at = @At("HEAD"))
     private void exav$onUseItemOn(LocalPlayer player, InteractionHand hand, BlockHitResult hit, CallbackInfoReturnable<InteractionResult> cir) {
         MyEdits.clicked(hit.getBlockPos(), hit.getDirection());
+        com.exav.addon.modules.ChestPreview.clicked(hit.getBlockPos());
     }
 }

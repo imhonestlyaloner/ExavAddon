@@ -16,5 +16,6 @@ public abstract class LevelRendererSkyImagesMixin {
     @Inject(method = "submitEntities", at = @At("TAIL"))
     private void exav$skyImages(PoseStack pose, LevelRenderState state, SubmitNodeCollector collector, CallbackInfo ci) {
         AlwaysEggs.submit(pose, collector);
+        com.exav.addon.modules.KillEffects.submit(pose, collector);
     }
 }

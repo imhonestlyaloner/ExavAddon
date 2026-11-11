@@ -3,6 +3,11 @@
   "package": "com.exav.addon.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "EquipmentGlintMixin",
+    "ItemLayerGlintMixin",
+    "ItemModelResolverGlintMixin",
+    "ItemStackRenderStateGlintMixin",
+    "AbstractClientPlayerCapeMixin",
     "AtmosphereModuleMixin",
     "FogRendererTintMixin",
     "GameRendererImpactMixin",
