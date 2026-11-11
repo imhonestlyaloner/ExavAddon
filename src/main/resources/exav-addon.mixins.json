@@ -9,6 +9,7 @@
     "ItemStackRenderStateGlintMixin",
     "AbstractClientPlayerCapeMixin",
     "AvatarHandGalaxyMixin",
+    "InspectAnimationMixin",
     "RenderBuffersGlintMixin",
     "SoundBufferLibraryMixin",
     "AtmosphereModuleMixin",

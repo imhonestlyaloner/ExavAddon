@@ -8,6 +8,7 @@ import com.exav.addon.modules.EndSkyLyrics;
 import com.exav.addon.modules.HolidayKnife;
 import com.exav.addon.modules.KillEffects;
 import com.exav.addon.modules.SusChunkPlus;
+import com.exav.addon.modules.InspectCycle;
 import com.exav.addon.modules.VideoPlayer;
 import com.exav.addon.modules.VideoSkybox;
 import com.exav.addon.sky.AlwaysEggs;
@@ -39,6 +40,7 @@ public final class ExavAddon extends AnubisAddon {
         ModuleRegistry.add(new BetterGlint());
         ModuleRegistry.add(new KillEffects());
         ModuleRegistry.add(new VideoPlayer());
+        ModuleRegistry.add(new InspectCycle());
     }
 
     @Override

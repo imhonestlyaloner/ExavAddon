@@ -15,6 +15,7 @@ import net.anubis.client.event.impl.Render2DEvent;
 import net.anubis.client.module.ClientModule;
 import net.anubis.client.module.setting.ActionSetting;
 import net.anubis.client.module.setting.BooleanSetting;
+import net.anubis.client.module.setting.KeySetting;
 import net.anubis.client.module.setting.ModeSetting;
 import net.anubis.client.module.setting.NumberSetting;
 import net.anubis.client.module.setting.StringSetting;
@@ -51,7 +52,12 @@ public final class VideoPlayer extends ClientModule {
     private final NumberSetting width = addSetting("width", new NumberSetting("Width (%)", 30.0F, 5.0F, 100.0F).step(0.5F));
     private final NumberSetting opacity = addSetting("opacity", new NumberSetting("Opacity", 1.0F, 0.1F, 1.0F).step(0.05F));
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.7F, 0.0F, 1.0F).step(0.05F));
-    private final BooleanSetting loop = addSetting("loop", new BooleanSetting("Loop", true));
+    private final ModeSetting onEnd = addSetting("on-end", new ModeSetting("When a Video Ends", "Next Video", "Next Video", "Loop", "Stop"));
+    private final KeySetting nextKey = addSetting("next-key", new KeySetting("Next Video Key", 93));     // ]
+    private final KeySetting previousKey = addSetting("previous-key", new KeySetting("Previous Video Key", 91)); // [
+    private final ActionSetting nextAction = addSetting("next", new ActionSetting("Next Video", () -> skip(1)));
+    private final ActionSetting previousAction = addSetting("previous", new ActionSetting("Previous Video", () -> skip(-1)));
+    private final BooleanSetting showTitle = addSetting("show-title", new BooleanSetting("Show Video Title", true));
     private final BooleanSetting playOnEnable = addSetting("autoplay", new BooleanSetting("Play When Enabled", true));
     private final ActionSetting play = addSetting("play", new ActionSetting("Play / Restart", this::start));
     private final ActionSetting stopAction = addSetting("stop", new ActionSetting("Stop", this::stop));
@@ -78,7 +84,12 @@ public final class VideoPlayer extends ClientModule {
         cropRight.visibleWhen(this::capturing);
         source.visibleWhen(() -> !capturing());
         volume.visibleWhen(() -> !capturing());
-        loop.visibleWhen(() -> !capturing());
+        onEnd.visibleWhen(() -> !capturing());
+        nextKey.visibleWhen(() -> !capturing());
+        previousKey.visibleWhen(() -> !capturing());
+        nextAction.visibleWhen(() -> !capturing());
+        previousAction.visibleWhen(() -> !capturing());
+        showTitle.visibleWhen(() -> !capturing());
     }
 
     private boolean capturing() {
@@ -107,17 +118,79 @@ public final class VideoPlayer extends ClientModule {
     private YouTube.Streams resolved;
     private long resolvedAt;
 
+    // ---------------------------------------------------------------- what's playing, and what's next
+
+    /** the link playing now (starts as the one in the settings, changes as you skip) */
+    private String current;
+    /** links played before this one, for Previous */
+    private final java.util.ArrayDeque<String> history = new java.util.ArrayDeque<>();
+    /** the playlist's videos when the link is a playlist (else empty), and where we are in it */
+    private List<String> playlist = List.of();
+    private int playlistIndex = -1;
+    private volatile String upNext;
+    private volatile String title = "";
+    private volatile long titleShownAt;
+
+    /** Play / Restart / turning the module on: start over from the link in the settings */
     private synchronized void start() {
+        history.clear();
+        playlist = List.of();
+        playlistIndex = -1;
+        play(source.get().trim());
+    }
+
+    /** next (+1) or previous (-1) video */
+    private synchronized void skip(int direction) {
+        if (capturing() || current == null) return;
+        if (direction < 0) {
+            if (playlistIndex > 0) {
+                playlistIndex--;
+                play(playlist.get(playlistIndex));
+            } else if (!history.isEmpty()) {
+                play(history.pop());
+            } else {
+                play(current); // nothing before it: start this one again
+            }
+            return;
+        }
+        if (!YouTube.isYouTube(current)) {
+            play(current); // a file / direct link has no "next": play it again
+            return;
+        }
+        history.push(current);
+        if (history.size() > 50) history.removeLast();
+        if (!playlist.isEmpty() && playlistIndex + 1 < playlist.size()) {
+            playlistIndex++;
+            play(playlist.get(playlistIndex));
+        } else if (upNext != null) {
+            playlist = List.of();
+            playlistIndex = -1;
+            play(upNext);
+        } else {
+            status = "No next video found";
+        }
+    }
+
+    @EventHandler
+    public void onKey(net.anubis.client.event.impl.KeyInputEvent event) {
+        if (event.action != 1 || capturing() || Minecraft.getInstance().screen != null) return;
+        if (event.key == nextKey.value()) skip(1);
+        else if (event.key == previousKey.value()) skip(-1);
+    }
+
+    private synchronized void play(String src) {
         stop();
         if (capturing()) {
             startCapture();
             return;
         }
-        String src = source.get().trim();
-        if (src.isEmpty()) {
+        if (src == null || src.isEmpty()) {
             status = "Paste a YouTube link (or a video link / file path) into the settings";
             return;
         }
+        current = src;
+        upNext = null;
+        title = "";
         running = true;
         int session = ++playSession;
         int height = frameHeight();
@@ -133,22 +206,42 @@ public final class VideoPlayer extends ClientModule {
                 StreamPlayer.preload(this::setStatus);
                 String video = src, audio = null;
                 if (YouTube.isYouTube(src)) {
+                    String link = src;
+                    if (YouTube.isPlaylist(src) && playlistIndex < 0) { // first time on a playlist link: get its videos
+                        setStatus("Getting the playlist...");
+                        List<String> videos = YouTube.playlist(src);
+                        if (!videos.isEmpty()) {
+                            String id = YouTube.videoId(src);
+                            int at = 0;
+                            for (int i = 0; i < videos.size(); i++) if (!id.isEmpty() && videos.get(i).contains(id)) at = i;
+                            synchronized (this) {
+                                if (session != playSession) return;
+                                playlist = videos;
+                                playlistIndex = at;
+                            }
+                            link = videos.get(at);
+                        }
+                    }
+                    final String video0 = link;
                     YouTube.Streams streams;
                     synchronized (this) {
-                        boolean fresh = src.equals(resolvedLink) && resolved != null && System.currentTimeMillis() - resolvedAt < 3 * 3600_000L;
+                        boolean fresh = video0.equals(resolvedLink) && resolved != null && System.currentTimeMillis() - resolvedAt < 3 * 3600_000L;
                         streams = fresh ? resolved : null;
                     }
                     if (streams == null) {
                         setStatus("Getting the video from YouTube...");
-                        streams = YouTube.find(src, height);
+                        streams = YouTube.find(video0, height);
                         synchronized (this) {
-                            resolvedLink = src;
+                            resolvedLink = video0;
                             resolved = streams;
                             resolvedAt = System.currentTimeMillis();
                         }
                     }
                     video = streams.video();
                     audio = streams.audio();
+                    upNext = streams.upNext();
+                    title = streams.title() == null ? "" : streams.title();
+                    titleShownAt = System.currentTimeMillis();
                 }
                 synchronized (this) {
                     if (!running || session != playSession) return;
@@ -168,7 +261,12 @@ public final class VideoPlayer extends ClientModule {
 
                                 @Override
                                 public void finished() {
-                                    if (session == playSession && loop.get()) Minecraft.getInstance().execute(VideoPlayer.this::start);
+                                    if (session != playSession) return;
+                                    switch (onEnd.get()) {
+                                        case "Loop" -> Minecraft.getInstance().execute(() -> play(current));
+                                        case "Next Video" -> Minecraft.getInstance().execute(() -> skip(1));
+                                        default -> { }
+                                    }
                                 }
                             });
                     player.start();
@@ -287,6 +385,14 @@ public final class VideoPlayer extends ClientModule {
         int color = alpha << 24 | 0xFFFFFF;
         g.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, 0, 0, 0, 0, f.width(), f.height(), f.width(), f.height(), color);
         pose.popMatrix();
+        // the video's title for a few seconds when it starts
+        long since = System.currentTimeMillis() - titleShownAt;
+        if (showTitle.get() && !title.isEmpty() && since < 4500 && !capturing()) {
+            float fade = Math.min(1, (4500 - since) / 600.0F) * opacity.get();
+            String text = mc.font.plainSubstrByWidth("\u25B6 " + title, Math.max(20, boxW - 8));
+            g.fill(bx, by, bx + boxW, by + 13, (int) (170 * fade) << 24);
+            g.drawString(mc.font, text, bx + 4, by + 3, (int) (255 * fade) << 24 | 0xFFFFFF);
+        }
         if (mc.screen instanceof ChatScreen) { // show the drag handles while chat is open
             g.fill(bx, by, bx + boxW, by + 1, 0xFF8A5CFF);
             g.fill(bx, by + boxH - 1, bx + boxW, by + boxH, 0xFF8A5CFF);

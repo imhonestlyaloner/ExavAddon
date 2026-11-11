@@ -13,7 +13,7 @@ import net.minecraft.world.item.ItemDisplayContext;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 
-/** Draws the item's quads a second time with the Better Glint render type (instead of, or as well as, the normal glint). */
+/** Draws the item's quads a second time with Better Glint's look over them, and its effect around the outline. */
 @Mixin(targets = "net.minecraft.client.renderer.item.ItemStackRenderState$LayerRenderState")
 public abstract class ItemLayerGlintMixin {
     @WrapOperation(
@@ -29,5 +29,6 @@ public abstract class ItemLayerGlintMixin {
         original.call(collector, pose, context, light, overlay, outline, tints, quads, type,
                 BetterGlint.keepVanilla() ? foil : ItemStackRenderState.FoilType.NONE);
         collector.submitItem(pose, context, light, overlay, outline, tints, quads, BetterGlint.itemType(), ItemStackRenderState.FoilType.NONE);
+        BetterGlint.submitAura(collector, pose, context, quads);
     }
 }

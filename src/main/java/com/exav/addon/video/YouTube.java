@@ -29,7 +29,7 @@ public final class YouTube {
     }
 
     /** what to play: a picture stream and, when YouTube serves it separately, a sound stream (else null) */
-    public record Streams(String video, String audio, String title) {
+    public record Streams(String video, String audio, String title, String upNext) {
     }
 
     private static boolean ready;
@@ -45,6 +45,10 @@ public final class YouTube {
             ready = true;
         }
         StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube, link);
+        // YouTube's "up next": the first related video
+        String upNext = info.getRelatedItems().stream()
+                .filter(i -> i instanceof org.schabi.newpipe.extractor.stream.StreamInfoItem)
+                .map(org.schabi.newpipe.extractor.InfoItem::getUrl).findFirst().orElse(null);
         // picture + sound together (YouTube only offers this up to 360p)
         VideoStream muxed = best(info.getVideoStreams(), maxHeight);
         // picture only (higher qualities), paired with the best sound
@@ -53,11 +57,42 @@ public final class YouTube {
                 .filter(a -> a.getDeliveryMethod() == DeliveryMethod.PROGRESSIVE_HTTP && a.isUrl())
                 .max(Comparator.comparingInt(AudioStream::getAverageBitrate)).orElse(null);
         if (videoOnly != null && audio != null && (muxed == null || videoOnly.getHeight() > muxed.getHeight())) {
-            return new Streams(videoOnly.getContent(), audio.getContent(), info.getName());
+            return new Streams(videoOnly.getContent(), audio.getContent(), info.getName(), upNext);
         }
-        if (muxed != null) return new Streams(muxed.getContent(), null, info.getName());
-        if (videoOnly != null) return new Streams(videoOnly.getContent(), audio == null ? null : audio.getContent(), info.getName());
+        if (muxed != null) return new Streams(muxed.getContent(), null, info.getName(), upNext);
+        if (videoOnly != null) return new Streams(videoOnly.getContent(), audio == null ? null : audio.getContent(), info.getName(), upNext);
         throw new IOException("YouTube didn't offer a playable version of this video");
+    }
+
+    /** is this a playlist link (list=...)? */
+    public static boolean isPlaylist(String link) {
+        return isYouTube(link) && link.matches(".*[?&]list=[^&]+.*") && !link.matches(".*[?&]list=(RD|UL|LL|WL)[^&]*.*");
+    }
+
+    /** the videos of a playlist link (first couple of pages) */
+    public static synchronized List<String> playlist(String link) throws Exception {
+        if (!ready) {
+            NewPipe.init(new JavaDownloader());
+            ready = true;
+        }
+        String id = link.replaceAll(".*[?&]list=([^&#]+).*", "$1");
+        String url = "https://www.youtube.com/playlist?list=" + id;
+        org.schabi.newpipe.extractor.playlist.PlaylistInfo info = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getInfo(ServiceList.YouTube, url);
+        List<String> out = new java.util.ArrayList<>();
+        info.getRelatedItems().forEach(i -> out.add(i.getUrl()));
+        org.schabi.newpipe.extractor.Page page = info.getNextPage();
+        for (int pages = 0; page != null && pages < 4; pages++) { // up to ~500 videos
+            var more = org.schabi.newpipe.extractor.playlist.PlaylistInfo.getMoreItems(ServiceList.YouTube, url, page);
+            more.getItems().forEach(i -> out.add(i.getUrl()));
+            page = more.getNextPage();
+        }
+        return out;
+    }
+
+    /** the video id in a link (to find it in a playlist), or "" */
+    public static String videoId(String link) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:v=|youtu\\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})").matcher(link);
+        return m.find() ? m.group(1) : "";
     }
 
     /** the tallest stream that fits the chosen quality (or the smallest one if none fit); skips AV1 */

@@ -1,128 +1,296 @@
 package com.exav.addon.glint;
 
 /**
- * Makes the Better Glint textures: seamless (tiling) patterns, bright where the glint shows and black where it
- * doesn't (the glint is added on top of the item, so black = no change).
+ * Makes Better Glint's animated looks. Each style has two parts, both seamless tiles and seamless animation loops:
+ * <ul>
+ *     <li>the <b>cover</b> painted over the item / arm (opaque, 128 px), and</li>
+ *     <li>the <b>aura</b> reaching out from the item's outline (64 px, see-through): u runs along the edge, v from the
+ *     edge (0) out to the tip (1).</li>
+ * </ul>
+ * Pixels are ABGR (NativeImage order). Looping in time: noise is sampled while drifting round a small circle, and
+ * anything that scrolls moves by whole tiles, so the last frame flows back into the first.
  */
 public final class GlintTexture {
     private GlintTexture() {
     }
 
     public static final String[] STYLES = {"Galaxy", "Flame", "Swirl", "Aurora", "Sparkle"};
+    public static final int SIZE = 128, AURA = 64;
 
-    /** Galaxy is painted over the item (covers it); the others are a glint added on top */
-    public static boolean covers(String style) {
-        return "Galaxy".equals(style);
+    /** each style's own two colours (used unless you pick your own): {main, second} */
+    public static int[] palette(String style) {
+        return switch (style) {
+            case "Flame" -> new int[]{0xFFC93D, 0xFF4A12};
+            case "Swirl" -> new int[]{0xFF4FD8, 0x3DE0FF};
+            case "Aurora" -> new int[]{0x3DFF9A, 0xA05CFF};
+            case "Sparkle" -> new int[]{0xEAF6FF, 0x5FB8FF};
+            default -> new int[]{0xB04DFF, 0x3D4DFF};
+        };
     }
-    public static final int SIZE = 128;
 
-    /** ABGR pixels (NativeImage order) */
-    public static int[] make(String style, int colorA, int colorB, boolean rainbow, float hueShift, float intensity) {
-        if (covers(style)) return galaxy(colorA, colorB, rainbow, hueShift, intensity);
-        int[] out = new int[SIZE * SIZE];
-        for (int y = 0; y < SIZE; y++) {
-            for (int x = 0; x < SIZE; x++) {
-                float u = x / (float) SIZE, v = y / (float) SIZE;
-                float strength, mix;
-                switch (style) {
-                    case "Swirl" -> {
-                        float w = fbm(u * 2, v * 2, 4, 3);
-                        float f = (float) Math.sin((fbm(u * 2 + w * 1.6F, v * 2 + w * 1.2F, 4, 4) * 7.0 + w * 4.0) * Math.PI);
-                        strength = smooth(0.15F, 0.95F, f * 0.5F + 0.5F);
-                        mix = w;
-                    }
-                    case "Aurora" -> {
-                        float n = fbm(u * 2, v * 1, 3, 9);
-                        float band = (float) Math.sin((v * 2 + n * 0.9) * Math.PI * 2);
-                        strength = (float) Math.pow(Math.max(0, band), 3) * (0.6F + 0.4F * n);
-                        mix = u;
-                    }
-                    case "Sparkle" -> {
-                        float base = (float) Math.pow(fbm(u * 4, v * 4, 4, 17), 3) * 0.6F;
-                        float stars = 0;
-                        for (int i = 0; i < 26; i++) {
-                            float sx = hash(i, 1), sy = hash(i, 2), r = 0.006F + 0.01F * hash(i, 3);
-                            float dx = wrap(u - sx), dy = wrap(v - sy);
-                            float d = (float) Math.sqrt(dx * dx + dy * dy);
-                            float cross = Math.max(0, 1 - Math.min(Math.abs(dx), Math.abs(dy)) / 0.004F) * Math.max(0, 1 - d / (r * 6));
-                            stars = Math.max(stars, Math.max(0, 1 - d / r) + cross * 0.7F);
-                        }
-                        strength = Math.min(1, base + stars);
-                        mix = hash((int) (u * 8) + (int) (v * 8) * 8, 4);
-                    }
-                    default -> { // Flame: soft tapered tongues of fire that sway, overlap and flicker
-                        float f = 0, hue = 0;
-                        for (int i = 0; i < 16; i++) {
-                            float phase = hash(i, 5), cx = hash(i, 6);
-                            float up = 1 - v;                                          // image rows grow downward; flames rise
-                            float t = up + phase - (float) Math.floor(up + phase);     // 0 at the base, 1 at the tip
-                            float sway = 0.035F * (float) Math.sin((up * 2 + phase * 3) * Math.PI * 2);
-                            float dx = wrap(u - cx - sway * t);
-                            float width = (0.05F + 0.04F * hash(i, 7)) * (1 - t * 0.85F);
-                            float body = (float) Math.exp(-(dx * dx) / (width * width));
-                            float along = (float) Math.pow(1 - t, 1.3) * smooth(0.0F, 0.12F, t);
-                            float tongue = body * along * (0.6F + 0.4F * hash(i, 8));
-                            if (tongue > f) hue = t;
-                            f = Math.max(f, tongue) + tongue * 0.25F;
-                        }
-                        float flicker = 0.8F + 0.4F * fbm(u * 2, v * 2, 3, 41);
-                        strength = Math.min(1, f * flicker * 1.15F);
-                        mix = Math.min(1, hue * 1.3F);
-                    }
-                }
-                strength = Math.min(1, strength * intensity);
-                int rgb;
-                if (rainbow) {
-                    rgb = java.awt.Color.HSBtoRGB((mix * 0.6F + hueShift) % 1.0F, 0.75F, 1.0F) & 0xFFFFFF;
-                } else {
-                    rgb = lerp(colorA, colorB, mix);
-                }
-                int r = (int) (((rgb >> 16) & 255) * strength), g = (int) (((rgb >> 8) & 255) * strength), b = (int) ((rgb & 255) * strength);
-                out[y * SIZE + x] = 0xFF000000 | b << 16 | g << 8 | r;
+    // ---------------------------------------------------------------- frames
+
+    public static int[][] cover(String style, int a, int b, boolean rainbow, float intensity, int frames) {
+        int[][] out = new int[frames][];
+        Stars stars = new Stars(SIZE, 70, 21);
+        for (int f = 0; f < frames; f++) {
+            float p = f / (float) frames;
+            int ca = a, cb = b;
+            if (rainbow) { // the colours travel round the rainbow once per loop
+                ca = java.awt.Color.HSBtoRGB(p + 0.12F, 0.75F, 1.0F) & 0xFFFFFF;
+                cb = java.awt.Color.HSBtoRGB(p, 0.85F, 1.0F) & 0xFFFFFF;
             }
+            int[] px = new int[SIZE * SIZE];
+            for (int y = 0; y < SIZE; y++) {
+                for (int x = 0; x < SIZE; x++) {
+                    float u = x / (float) SIZE, v = y / (float) SIZE;
+                    int c = switch (style) {
+                        case "Flame" -> flame(u, v, p, ca, cb, intensity);
+                        case "Swirl" -> swirl(u, v, p, ca, cb, intensity);
+                        case "Aurora" -> aurora(u, v, p, ca, cb, intensity);
+                        case "Sparkle" -> sparkle(u, v, p, ca, cb, intensity);
+                        default -> galaxy(u, v, p, ca, cb, intensity);
+                    };
+                    float star = stars.at(x, y, p);
+                    if (star > 0 && !"Flame".equals(style) && !"Swirl".equals(style)) {
+                        c = lerp(c, 0xFFFFFF, Math.min(1, star) * ("Aurora".equals(style) ? 0.5F : 0.95F));
+                    }
+                    px[y * SIZE + x] = abgr(c, 255);
+                }
+            }
+            out[f] = px;
         }
         return out;
     }
 
-    /**
-     * Opaque galaxy: a deep blue base (Color 2) with swirling violet / pink nebula clouds (Color 1) and a scatter of
-     * small stars. Intensity makes the clouds brighter and bigger.
-     */
-    private static int[] galaxy(int nebula, int base, boolean rainbow, float hueShift, float intensity) {
-        if (rainbow) {
-            nebula = java.awt.Color.HSBtoRGB((hueShift + 0.12F) % 1.0F, 0.7F, 1.0F) & 0xFFFFFF;
-            base = java.awt.Color.HSBtoRGB(hueShift % 1.0F, 0.8F, 1.0F) & 0xFFFFFF;
+    public static int[][] aura(String style, int a, int b, boolean rainbow, float intensity, int frames) {
+        int[][] out = new int[frames][];
+        for (int f = 0; f < frames; f++) {
+            float p = f / (float) frames;
+            int ca = a, cb = b;
+            if (rainbow) {
+                ca = java.awt.Color.HSBtoRGB(p + 0.12F, 0.75F, 1.0F) & 0xFFFFFF;
+                cb = java.awt.Color.HSBtoRGB(p, 0.85F, 1.0F) & 0xFFFFFF;
+            }
+            int[] px = new int[AURA * AURA];
+            for (int y = 0; y < AURA; y++) {
+                for (int x = 0; x < AURA; x++) {
+                    float u = x / (float) AURA, v = y / (float) AURA;
+                    float[] rgba = switch (style) {
+                        case "Flame" -> flameAura(u, v, p, ca, cb);
+                        case "Swirl" -> swirlAura(u, v, p, ca, cb);
+                        case "Aurora" -> auroraAura(u, v, p, ca, cb);
+                        case "Sparkle" -> sparkleAura(u, v, p, ca, cb);
+                        default -> galaxyAura(u, v, p, ca, cb);
+                    };
+                    float alpha = Math.max(0, Math.min(1, rgba[1] * intensity));
+                    px[y * AURA + x] = abgr((int) rgba[0], Math.round(alpha * 255));
+                }
+            }
+            out[f] = px;
         }
+        return out;
+    }
+
+    // ---------------------------------------------------------------- covers
+
+    /** deep blue with violet / pink nebula clouds that slowly churn (stars twinkle on top) */
+    private static int galaxy(float u, float v, float p, int nebula, int base, float intensity) {
+        float cx = cos(p) * 0.07F, sy = sin(p) * 0.07F;
+        float wx = fbm(u + cx, v + sy, 4, 61), wy = fbm(u - sy, v + cx, 4, 67);
+        float body = fbm(u + 0.45F * wx, v + 0.45F * wy, 5, 71);
+        float wisps = fbm(u * 2 + 0.8F * wy + cx, v * 2 + 0.8F * wx - sy, 4, 79);
         int deep = scale(base, 0.38F), pink = lerp(nebula, 0xFFC4F4, 0.45F);
-        float[] glow = new float[SIZE * SIZE];
-        for (int i = 0; i < 70; i++) { // stars, a few with a soft halo
-            float sx = hash(i, 21), sy = hash(i, 22), b = 0.35F + 0.65F * hash(i, 23), r = hash(i, 24) < 0.15F ? 2.6F : 1.1F;
-            for (int dy = -4; dy <= 4; dy++) {
-                for (int dx = -4; dx <= 4; dx++) {
-                    float d = (float) Math.sqrt(dx * dx + dy * dy);
-                    float a = b * Math.max(0, 1 - d / r);
-                    int px = Math.floorMod((int) (sx * SIZE) + dx, SIZE), py = Math.floorMod((int) (sy * SIZE) + dy, SIZE);
-                    glow[py * SIZE + px] = Math.max(glow[py * SIZE + px], a);
+        int c = lerp(deep, base, smooth(0.25F, 0.7F, body));
+        c = lerp(c, nebula, smooth(0.62F - 0.1F * intensity, 0.9F, body * 0.55F + wisps * 0.6F) * 0.9F);
+        return lerp(c, pink, smooth(0.78F, 1.0F, wisps * 0.7F + body * 0.45F) * Math.min(1, intensity));
+    }
+
+    /** living fire: tall tongues licking upward out of dark embers, with sparks rising */
+    private static int flame(float u, float v, float p, int hot, int fire, float intensity) {
+        float warp = fbm(u, v + p, 3, 11);
+        // stretched tall (twice the detail across as up), bent by the slower warp so it doesn't look repeated
+        float f = fbm(u * 2 + 0.6F * warp, v + p + 0.3F * warp, 5, 13);
+        float lick = fbm(u * 4 + 0.4F * warp, v * 2 + 2 * p, 3, 17);
+        float heat = smooth(0.42F, 0.86F, f * 0.8F + lick * 0.35F) * (0.8F + 0.25F * intensity);
+        int c = ramp(heat, new float[]{0, 0.35F, 0.6F, 0.85F, 1.0F},
+                new int[]{scale(fire, 0.05F), scale(fire, 0.4F), fire, hot, lerp(hot, 0xFFFFFF, 0.65F)});
+        float spark = 0; // sparks drifting up
+        for (int i = 0; i < 24; i++) {
+            float sx = hash(i, 31), sy = frac(hash(i, 32) - p * (1 + (i & 1)));
+            float d = len(wrap(u - sx - 0.02F * sin(p * 2 + hash(i, 33))), wrap(v - sy));
+            spark = Math.max(spark, Math.max(0, 1 - d / 0.012F));
+        }
+        return lerp(c, lerp(hot, 0xFFFFFF, 0.5F), spark);
+    }
+
+    /** hypnotic candy swirl: ribbons of the two colours twisting round each other, glossy and shaded, flowing along */
+    private static int swirl(float u, float v, float p, int a, int b, float intensity) {
+        float w = fbm(u + cos(p) * 0.08F, v + sin(p) * 0.08F, 4, 23);
+        float w2 = fbm(u * 2 - sin(p) * 0.1F, v * 2 + cos(p) * 0.1F, 3, 27);
+        // slopes and the per-loop flow are multiples of 3 (three ribbon colours), so it tiles and loops without a seam
+        float t = 3 * u + 3 * v + 3.2F * w + 0.6F * w2 + 3 * p;
+        float stripe = frac(t);
+        int band = Math.floorMod((int) Math.floor(t), 3);
+        int col = band == 0 ? a : band == 1 ? b : lerp(a, 0xFFFFFF, 0.55F);
+        float shade = 0.55F + 0.45F * (float) Math.sin(Math.PI * stripe); // rounded, like a ribbon
+        int c = scale(col, shade);
+        float gloss = smooth(0.18F, 0.0F, Math.abs(stripe - 0.32F)) * 0.6F * intensity; // a shine running along each ribbon
+        return lerp(c, 0xFFFFFF, gloss);
+    }
+
+    /** a night sky with northern lights: green curtains with purple tops rippling sideways */
+    private static int aurora(float u, float v, float p, int green, int purple, float intensity) {
+        int c = lerp(0x040A1C, 0x0B1638, fbm(u, v, 3, 41));
+        for (int k = 0; k < 2; k++) {
+            float line = 0.25F + 0.5F * k + 0.14F * (fbm(u + cos(p) * 0.12F, 0.3F * k + sin(p) * 0.12F, 3, 43 + k) - 0.5F) * 2;
+            float d = wrap(v - line);
+            float env = d < 0 ? (float) Math.exp(-(d / 0.05F) * (d / 0.05F)) : (float) Math.exp(-(d / 0.2F) * (d / 0.2F));
+            float rays = fbm(u * 8 + cos(p) * 0.25F, v + k * 0.37F + sin(p) * 0.25F, 3, 47 + k);
+            float glow = env * (0.35F + 0.9F * rays * rays) * (0.8F + 0.4F * intensity);
+            int col = d < 0 ? lerp(green, purple, smooth(0, 0.06F, -d)) : lerp(green, lerp(green, 0x3DE0FF, 0.5F), smooth(0.05F, 0.25F, d));
+            c = lerp(c, col, Math.min(1, glow));
+        }
+        return c;
+    }
+
+    /** cut diamond: many facets flashing white one after another as the light catches them, with rainbow fire */
+    private static int sparkle(float u, float v, float p, int light, int ice, float intensity) {
+        float d1 = 9, d2 = 9;
+        int id = 0;
+        for (int i = 0; i < 40; i++) {
+            float d = len(wrap(u - hash(i, 51)), wrap(v - hash(i, 52)));
+            if (d < d1) {
+                d2 = d1;
+                d1 = d;
+                id = i;
+            } else if (d < d2) {
+                d2 = d;
+            }
+        }
+        float shade = 0.15F + 0.5F * hash(id, 54);
+        int c = lerp(scale(ice, 0.22F), ice, shade);
+        int prism = java.awt.Color.HSBtoRGB(hash(id, 55), 0.35F, 1.0F) & 0xFFFFFF; // diamonds throw colour
+        c = lerp(c, prism, 0.18F);
+        float flash = (float) Math.pow(0.5 + 0.5 * Math.sin(2 * Math.PI * (p * (1 + (id % 3)) + hash(id, 53))), 6) * intensity;
+        c = lerp(c, light, flash * 0.85F);
+        float edge = smooth(0.01F, 0.0F, d2 - d1); // bright lines where facets meet
+        return lerp(c, light, edge * 0.75F);
+    }
+
+    // ---------------------------------------------------------------- auras: {rgb, alpha}
+
+    private static float[] flameAura(float u, float v, float p, int hot, int fire) {
+        float warp = fbm(u, v - 2 * p, 3, 61);
+        float f = fbm(u * 2 + 0.4F * warp, v - 4 * p, 4, 63);      // flames move outward
+        float height = 0.35F + 0.75F * fbm(u * 4, 0.5F - p * 2, 2, 65); // tongues of different lengths
+        float a = smooth(0, 0.25F, height - v) * (0.55F + 0.7F * f);
+        a *= (float) Math.pow(Math.max(0, 1 - v), 0.6);
+        int c = ramp(Math.min(1, v / Math.max(0.1F, height)), new float[]{0, 0.4F, 0.75F, 1},
+                new int[]{lerp(hot, 0xFFFFFF, 0.15F), hot, fire, scale(fire, 0.55F)});
+        return new float[]{c, a};
+    }
+
+    private static float[] galaxyAura(float u, float v, float p, int nebula, int base) {
+        float w = fbm(u * 2 + cos(p) * 0.1F, v - p, 3, 71);
+        float a = (float) Math.pow(Math.max(0, 1 - v), 1.3) * smooth(0.3F, 0.75F, w) * 1.3F;
+        float star = 0;
+        for (int i = 0; i < 10; i++) {
+            float d = len(wrap(u - hash(i, 72)), wrap(v - frac(hash(i, 73) + p)) * 0.5F);
+            star = Math.max(star, Math.max(0, 1 - d / 0.03F) * (1 - v));
+        }
+        return new float[]{lerp(lerp(base, nebula, w), 0xFFFFFF, star), Math.min(1, a + star)};
+    }
+
+    private static float[] swirlAura(float u, float v, float p, int a, int b) {
+        float w = fbm(u * 2 + cos(p) * 0.1F, v + sin(p) * 0.1F, 3, 81);
+        float s = 0.5F + 0.5F * (float) Math.sin(2 * Math.PI * (2 * u + 2 * v + 2 * w - p));
+        float alpha = (float) Math.pow(s, 2) * (float) Math.pow(Math.max(0, 1 - v), 1.3) * 1.4F;
+        return new float[]{lerp(b, a, s), alpha};
+    }
+
+    private static float[] auroraAura(float u, float v, float p, int green, int purple) {
+        float rays = fbm(u * 8 + cos(p) * 0.3F, v * 0.5F + sin(p) * 0.3F, 3, 91);
+        float alpha = (float) Math.pow(Math.max(0, 1 - v), 0.9) * (0.15F + rays * rays * 1.2F);
+        return new float[]{lerp(green, purple, smooth(0.2F, 0.9F, v)), Math.min(1, alpha)};
+    }
+
+    private static float[] sparkleAura(float u, float v, float p, int light, int ice) {
+        float a = (float) Math.pow(Math.max(0, 1 - v), 2.5) * 0.6F; // shine at the edge
+        float star = 0;
+        for (int i = 0; i < 14; i++) {
+            float sx = hash(i, 101), sy = 0.1F + 0.75F * hash(i, 102);
+            float blink = (float) Math.pow(Math.max(0, Math.sin(2 * Math.PI * (p + hash(i, 103)))), 6);
+            float dx = Math.abs(wrap(u - sx)), dy = Math.abs(v - sy);
+            float cross = Math.max(Math.max(0, 1 - dx / 0.012F) * Math.max(0, 1 - dy / 0.16F),
+                    Math.max(0, 1 - dy / 0.025F) * Math.max(0, 1 - dx / 0.07F));
+            cross = Math.max(cross, Math.max(0, 1 - len(dx, dy * 0.5F) / 0.025F)); // bright centre
+            star = Math.max(star, cross * blink);
+        }
+        return new float[]{lerp(ice, light, Math.min(1, star + 0.3F)), Math.min(1, a + star)};
+    }
+
+    // ---------------------------------------------------------------- twinkling stars (for the covers)
+
+    private static final class Stars {
+        private final int[] id;
+        private final float[] glow;
+
+        Stars(int size, int count, int seed) {
+            id = new int[size * size];
+            glow = new float[size * size];
+            java.util.Arrays.fill(id, -1);
+            for (int i = 0; i < count; i++) {
+                float sx = hash(i, seed), sy = hash(i, seed + 1), b = 0.35F + 0.65F * hash(i, seed + 2), r = hash(i, seed + 3) < 0.15F ? 2.6F : 1.1F;
+                for (int dy = -4; dy <= 4; dy++) {
+                    for (int dx = -4; dx <= 4; dx++) {
+                        float a = b * Math.max(0, 1 - (float) Math.sqrt(dx * dx + dy * dy) / r);
+                        int px = Math.floorMod((int) (sx * size) + dx, size), py = Math.floorMod((int) (sy * size) + dy, size);
+                        if (a > glow[py * size + px]) {
+                            glow[py * size + px] = a;
+                            id[py * size + px] = i;
+                        }
+                    }
                 }
             }
         }
-        int[] out = new int[SIZE * SIZE];
-        for (int y = 0; y < SIZE; y++) {
-            for (int x = 0; x < SIZE; x++) {
-                float u = x / (float) SIZE, v = y / (float) SIZE;
-                // warped fractal noise = smoky, swirling clouds (warping by tiling noise keeps it seamless)
-                float wx = fbm(u, v, 4, 61), wy = fbm(u, v, 4, 67);
-                float body = fbm(u + 0.45F * wx, v + 0.45F * wy, 5, 71);
-                float wisps = fbm(u * 2 + 0.8F * wy, v * 2 + 0.8F * wx, 4, 79);
-                int c = lerp(deep, base, smooth(0.25F, 0.7F, body));                    // blue body, darker in the folds
-                float cloud = smooth(0.62F - 0.1F * intensity, 0.9F, body * 0.55F + wisps * 0.6F);
-                c = lerp(c, nebula, cloud * 0.9F);                                        // violet clouds
-                c = lerp(c, pink, smooth(0.78F, 1.0F, wisps * 0.7F + body * 0.45F) * Math.min(1, intensity)); // pink cores
-                c = lerp(c, 0xFFFFFF, Math.min(1, glow[y * SIZE + x]) * 0.9F);            // stars
-                out[y * SIZE + x] = 0xFF000000 | (c & 255) << 16 | (c & 0xFF00) | (c >> 16) & 255;
-            }
+
+        float at(int x, int y, float p) {
+            int i = id[y * SIZE + x];
+            if (i < 0) return 0;
+            float tw = 0.55F + 0.45F * (float) Math.sin(2 * Math.PI * (p * (1 + (i % 2)) + hash(i, 9)));
+            return glow[y * SIZE + x] * tw;
         }
-        return out;
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private static int abgr(int rgb, int alpha) {
+        return alpha << 24 | (rgb & 255) << 16 | (rgb & 0xFF00) | (rgb >> 16) & 255;
+    }
+
+    private static float cos(float p) {
+        return (float) Math.cos(2 * Math.PI * p);
+    }
+
+    private static float sin(float p) {
+        return (float) Math.sin(2 * Math.PI * p);
+    }
+
+    private static float len(float x, float y) {
+        return (float) Math.sqrt(x * x + y * y);
+    }
+
+    private static float frac(float x) {
+        return x - (float) Math.floor(x);
+    }
+
+    private static int ramp(float t, float[] at, int[] colors) {
+        t = Math.max(0, Math.min(1, t));
+        for (int i = 1; i < at.length; i++) {
+            if (t <= at[i]) return lerp(colors[i - 1], colors[i], (t - at[i - 1]) / (at[i] - at[i - 1]));
+        }
+        return colors[colors.length - 1];
     }
 
     private static int scale(int rgb, float k) {
@@ -168,7 +336,7 @@ public final class GlintTexture {
         return hash(Math.floorMod(x, period) * 7919 + Math.floorMod(y, period) * 104729 + seed * 31337, seed);
     }
 
-    /** fractal noise over the unit square, scaled so it tiles: (u,v) in 0..1 times base frequency */
+    /** fractal noise over the unit square that tiles (shifting u or v by a whole number gives the same value) */
     private static float fbm(float u, float v, int octaves, int seed) {
         float sum = 0, amp = 0.5F, norm = 0;
         int base = 4;
