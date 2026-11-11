@@ -13,7 +13,15 @@ repositories {
 	// imgui-java (anubis bundles it, we only compile against it)
 	maven {
 		url = "https://repo1.maven.org/maven2/"
-		content { includeGroup "io.github.spair" }
+		content {
+			includeGroup "io.github.spair"
+			// video player libraries
+			includeGroup "org.bytedeco"
+			includeGroup "org.jsoup"
+			includeGroup "org.mozilla"
+			includeGroup "com.google.protobuf"
+			includeGroup "com.google.code.findbugs"
+		}
 	}
 	// anubis isnt on a public maven, run `gradlew publishToMavenLocal` in the anubis repo and it shows up here
 	mavenLocal {
@@ -21,6 +29,11 @@ repositories {
 	}
 	// libs anubis needs (imgui, jna etc), runClient loads anubis with these
 	mavenCentral()
+}
+
+configurations {
+	// libraries packed inside the addon jar (YouTube reading + video decoding), nothing is downloaded at runtime
+	bundle { transitive = false }
 }
 
 loom {
@@ -42,6 +55,28 @@ dependencies {
 	}
 	// anubis ships imgui inside its jar, this is just so HUD overlay code compiles
 	compileOnly "io.github.spair:imgui-java-binding:1.90.0"
+
+	// Video Player: NewPipeExtractor reads YouTube (built from source, see bundled-libs/README.md), FFmpeg decodes
+	bundle files("bundled-libs/newpipe-extractor-0.27.1.jar", "bundled-libs/nanojson.jar")
+	bundle "org.jsoup:jsoup:1.24.1"
+	bundle "org.mozilla:rhino:1.8.1"
+	bundle "org.mozilla:rhino-engine:1.8.1"
+	bundle "com.google.protobuf:protobuf-javalite:4.36.2"
+	compileOnly "com.google.code.findbugs:jsr305:3.0.2"
+	bundle "org.bytedeco:javacv:1.5.14"
+	bundle "org.bytedeco:javacpp:1.5.14"
+	bundle "org.bytedeco:javacpp:1.5.14:windows-x86_64"
+	bundle "org.bytedeco:ffmpeg:8.1.2-1.5.14"
+	bundle "org.bytedeco:ffmpeg:8.1.2-1.5.14:windows-x86_64"
+	compileOnly files(configurations.bundle)
+}
+
+jar {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+	from({ configurations.bundle.collect { zipTree(it) } }) {
+		exclude "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/*.EC", "META-INF/MANIFEST.MF",
+				"module-info.class", "META-INF/versions/*/module-info.class", "META-INF/maven/**"
+	}
 }
 
 processResources {

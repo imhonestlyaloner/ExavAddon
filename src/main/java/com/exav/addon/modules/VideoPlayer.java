@@ -1,19 +1,14 @@
 package com.exav.addon.modules;
 
 import com.exav.addon.ExavAddon;
-import com.exav.addon.video.Tools;
+import com.exav.addon.video.StreamPlayer;
+import com.exav.addon.video.YouTube;
 import com.exav.addon.video.WindowCapture;
 import com.mojang.blaze3d.platform.NativeImage;
-import java.io.DataInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.FloatControl;
-import javax.sound.sampled.SourceDataLine;
 import net.anubis.client.event.EventHandler;
 import net.anubis.client.event.impl.MouseInputEvent;
 import net.anubis.client.event.impl.Render2DEvent;
@@ -34,9 +29,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Plays a video as an overlay you can move and resize. Uses ffmpeg (installed on your computer) to decode a video
- * file or a direct video link; picture and sound are both streamed from it. Drag it with the mouse while chat is
- * open (bottom-right corner resizes), or use the sliders. YouTube page links aren't supported.
+ * Plays a YouTube video, a video link or a video file as an overlay you can move and resize - all inside the game
+ * (YouTube is read with the bundled NewPipeExtractor, video decoded with the bundled FFmpeg library; nothing to
+ * install or download). Drag it with the mouse while chat is open (bottom-right corner resizes), or use the sliders.
  */
 public final class VideoPlayer extends ClientModule {
     private static final Logger LOGGER = LoggerFactory.getLogger("Exav Addon");
@@ -58,25 +53,14 @@ public final class VideoPlayer extends ClientModule {
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.7F, 0.0F, 1.0F).step(0.05F));
     private final BooleanSetting loop = addSetting("loop", new BooleanSetting("Loop", true));
     private final BooleanSetting playOnEnable = addSetting("autoplay", new BooleanSetting("Play When Enabled", true));
-    private final StringSetting ffmpegPath = addSetting("ffmpeg", new StringSetting("FFmpeg Path (auto = downloaded by the addon)", "auto"));
-    private final StringSetting ytdlpPath = addSetting("yt-dlp", new StringSetting("yt-dlp Path (auto = downloaded by the addon)", "auto"));
-    private final ActionSetting updateYt = addSetting("update-yt", new ActionSetting("Update YouTube Support", () -> {
-        try {
-            Tools.forgetYtDlp();
-            status = "YouTube support will update the next time you press Play";
-        } catch (IOException e) {
-            status = "Couldn't update: " + e.getMessage();
-        }
-    }));
     private final ActionSetting play = addSetting("play", new ActionSetting("Play / Restart", this::start));
     private final ActionSetting stopAction = addSetting("stop", new ActionSetting("Stop", this::stop));
 
-    private final List<Process> processes = new ArrayList<>();
-    private Thread videoThread, audioThread;
-    private volatile byte[] frame;
-    private volatile int frameNumber;
-    private int uploaded = -1;
-    private int frameW, frameH;
+    private StreamPlayer player;
+    private Thread videoThread;
+    /** the newest picture (with its own size), swapped in by the playback thread */
+    private volatile StreamPlayer.Picture frame;
+    private StreamPlayer.Picture uploaded;
     private DynamicTexture texture;
     private volatile String status = "";
     private volatile boolean running;
@@ -95,9 +79,6 @@ public final class VideoPlayer extends ClientModule {
         source.visibleWhen(() -> !capturing());
         volume.visibleWhen(() -> !capturing());
         loop.visibleWhen(() -> !capturing());
-        ffmpegPath.visibleWhen(() -> !capturing());
-        ytdlpPath.visibleWhen(() -> !capturing());
-        updateYt.visibleWhen(() -> !capturing());
     }
 
     private boolean capturing() {
@@ -120,6 +101,12 @@ public final class VideoPlayer extends ClientModule {
         return Integer.parseInt(resolution.get().replace("p", ""));
     }
 
+    private volatile int playSession;
+    /** the last YouTube link and its streams, so Loop / Restart doesn't ask YouTube again */
+    private String resolvedLink;
+    private YouTube.Streams resolved;
+    private long resolvedAt;
+
     private synchronized void start() {
         stop();
         if (capturing()) {
@@ -131,28 +118,67 @@ public final class VideoPlayer extends ClientModule {
             status = "Paste a YouTube link (or a video link / file path) into the settings";
             return;
         }
-        frameH = frameHeight();
-        frameW = Math.round(frameH * 16 / 9.0F / 2) * 2;
         running = true;
         int session = ++playSession;
+        int height = frameHeight();
         status = "Loading...";
-        // everything below can take a while (first-time downloads, asking YouTube), so it runs off the game thread
+        // finding the streams and opening them can take a moment, so it runs off the game thread
         Thread prepare = new Thread(() -> {
             try {
-                String ffmpeg = Tools.ffmpeg(ffmpegPath.get(), this::setStatus);
-                List<String> inputs = List.of(src);
-                boolean network = src.startsWith("http");
-                if (needsYtDlp(src)) {
-                    inputs = resolveWithYtDlp(src, frameH, true);
-                    if (inputs == null) return;
+                // the FFmpeg library inside the addon jar is unpacked here the first time (nothing is downloaded)
+                if (System.getProperty("org.bytedeco.javacpp.cachedir") == null) {
+                    System.setProperty("org.bytedeco.javacpp.cachedir",
+                            net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("exav-addon").resolve("video-library").toString());
+                }
+                StreamPlayer.preload(this::setStatus);
+                String video = src, audio = null;
+                if (YouTube.isYouTube(src)) {
+                    YouTube.Streams streams;
+                    synchronized (this) {
+                        boolean fresh = src.equals(resolvedLink) && resolved != null && System.currentTimeMillis() - resolvedAt < 3 * 3600_000L;
+                        streams = fresh ? resolved : null;
+                    }
+                    if (streams == null) {
+                        setStatus("Getting the video from YouTube...");
+                        streams = YouTube.find(src, height);
+                        synchronized (this) {
+                            resolvedLink = src;
+                            resolved = streams;
+                            resolvedAt = System.currentTimeMillis();
+                        }
+                    }
+                    video = streams.video();
+                    audio = streams.audio();
                 }
                 synchronized (this) {
                     if (!running || session != playSession) return;
-                    launch(ffmpeg, inputs, network);
+                    setStatus("Loading...");
+                    player = new StreamPlayer(video, audio, height, Integer.parseInt(fps.get()),
+                            () -> volume.get() * Minecraft.getInstance().options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER),
+                            new StreamPlayer.Listener() {
+                                @Override
+                                public void picture(StreamPlayer.Picture picture) {
+                                    if (session == playSession) frame = picture;
+                                }
+
+                                @Override
+                                public void status(String text) {
+                                    if (session == playSession) setStatus(text);
+                                }
+
+                                @Override
+                                public void finished() {
+                                    if (session == playSession && loop.get()) Minecraft.getInstance().execute(VideoPlayer.this::start);
+                                }
+                            });
+                    player.start();
                 }
-            } catch (IOException e) {
-                if (running && session == playSession) status = "Couldn't get the video player ready: " + e.getMessage();
-                LOGGER.warn("Video player setup failed", e);
+            } catch (Throwable e) {
+                if (running && session == playSession) {
+                    String why = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    status = "Couldn't play that video: " + (why.length() > 140 ? why.substring(0, 140) + "..." : why);
+                }
+                LOGGER.warn("Video player couldn't start", e);
             }
         }, "Exav video setup");
         prepare.setDaemon(true);
@@ -163,96 +189,11 @@ public final class VideoPlayer extends ClientModule {
         if (running) status = text;
     }
 
-    private volatile int playSession;
-
-    /** web pages (YouTube and other sites) need yt-dlp to find the actual video; files and direct video links don't */
-    private static boolean needsYtDlp(String src) {
-        String lower = src.toLowerCase(Locale.ROOT);
-        if (!lower.startsWith("http")) return false;
-        String path = lower.replaceAll("[?#].*$", "");
-        return !(path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mkv") || path.endsWith(".mov")
-                || path.endsWith(".m3u8") || path.endsWith(".avi") || path.endsWith(".flv") || path.endsWith(".ts"));
-    }
-
-    /** asks yt-dlp for the stream address(es): one with picture + sound, or a picture one and a sound one */
-    private List<String> resolveWithYtDlp(String url, int height, boolean retry) throws IOException {
-        String format = "bv*[height<=" + height + "][vcodec!^=av01]+ba/b[height<=" + height + "]/b";
-        String ytDlp = Tools.ytDlp(ytdlpPath.get(), this::setStatus);
-        String deno = Tools.deno(ytdlpPath.get(), this::setStatus);
-        setStatus("Getting the video from YouTube...");
-        try {
-            List<String> cmd = new ArrayList<>(List.of(ytDlp, "--no-playlist", "--no-warnings", "-f", format, "-g"));
-            if (deno != null) cmd.addAll(List.of("--js-runtimes", "deno:" + deno));
-            cmd.add(url);
-            Process p = new ProcessBuilder(cmd).start();
-            synchronized (this) {
-                processes.add(p);
-            }
-            String out = new String(p.getInputStream().readAllBytes()).trim();
-            String err = new String(p.getErrorStream().readAllBytes()).trim();
-            p.waitFor();
-            List<String> urls = new ArrayList<>();
-            for (String line : out.split("\\R")) if (line.startsWith("http")) urls.add(line.trim());
-            if (urls.isEmpty() && retry && Tools.isAuto(ytdlpPath.get()) && running) {
-                // YouTube changes often: get the newest yt-dlp once and try again
-                Tools.forgetYtDlp();
-                return resolveWithYtDlp(url, height, false);
-            }
-            if (urls.isEmpty()) {
-                String last = err.isEmpty() ? "no video found" : err.substring(err.lastIndexOf('\n') + 1);
-                if (running) status = "yt-dlp: " + (last.length() > 120 ? last.substring(0, 120) + "..." : last);
-                LOGGER.warn("yt-dlp couldn't get {}: {}", url, err);
-                return null;
-            }
-            return urls;
-        } catch (IOException e) {
-            if (running) status = "Couldn't run yt-dlp: " + e.getMessage();
-            return null;
-        } catch (InterruptedException e) {
-            return null;
-        }
-    }
-
-    /**
-     * One ffmpeg plays everything: picture as raw RGBA frames on its normal output, sound as 16-bit PCM on its
-     * second output (so both come from the same clock and stay in sync).
-     */
-    private synchronized void launch(String ffmpeg, List<String> inputs, boolean network) {
-        int rate = Integer.parseInt(fps.get());
-        status = "Loading...";
-        List<String> cmd = new ArrayList<>(List.of(ffmpeg, "-nostdin", "-hide_banner", "-nostats", "-loglevel", "quiet"));
-        for (String in : inputs) {
-            if (network) cmd.addAll(List.of("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"));
-            if (loop.get()) cmd.addAll(List.of("-stream_loop", "-1"));
-            cmd.addAll(List.of("-re", "-i", in));
-        }
-        int audioInput = inputs.size() > 1 ? 1 : 0;
-        cmd.addAll(List.of("-map", "0:v:0", "-vf",
-                "scale=" + frameW + ":" + frameH + ":force_original_aspect_ratio=decrease,pad=" + frameW + ":" + frameH + ":(ow-iw)/2:(oh-ih)/2,fps=" + rate,
-                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"));
-        cmd.addAll(List.of("-map", audioInput + ":a:0?", "-f", "s16le", "-ac", "2", "-ar", "44100", "pipe:2"));
-        try {
-            Process p = new ProcessBuilder(cmd).start();
-            processes.add(p);
-            int w = frameW, h = frameH;
-            videoThread = new Thread(() -> readVideo(p.getInputStream(), w, h), "Exav video");
-            videoThread.setDaemon(true);
-            videoThread.start();
-            audioThread = new Thread(() -> playAudio(p.getErrorStream()), "Exav video audio");
-            audioThread.setDaemon(true);
-            audioThread.start();
-        } catch (IOException e) {
-            running = false;
-            status = "Couldn't start ffmpeg: " + e.getMessage();
-            LOGGER.warn("Couldn't start ffmpeg", e);
-        }
-    }
-
     private synchronized void stop() {
         running = false;
         playSession++;
-        for (Process p : processes) p.destroyForcibly();
-        processes.clear();
+        if (player != null) player.stop();
+        player = null;
         frame = null;
         status = "";
     }
@@ -264,9 +205,8 @@ public final class VideoPlayer extends ClientModule {
             status = "Window Capture only works on Windows";
             return;
         }
-        frameH = frameHeight();
-        frameW = Math.round(frameH * 16 / 9.0F / 2) * 2;
-        int w = frameW, h = frameH;
+        int h = frameHeight(), w = Math.round(h * 16 / 9.0F / 2) * 2;
+        int session = ++playSession;
         long frameMs = Math.max(5, 1000 / Integer.parseInt(fps.get()));
         running = true;
         status = "Looking for a window with \"" + windowTitle.get().trim() + "\" in its title...";
@@ -276,15 +216,14 @@ public final class VideoPlayer extends ClientModule {
             boolean useA = true;
             long lastFind = 0;
             try {
-                while (running) {
+                while (running && session == playSession) {
                     long t0 = System.currentTimeMillis();
                     boolean ok = false;
                     try {
                         byte[] target = useA ? a : b;
                         ok = capture.grab(target, w, h, cropLeft.get() / 100, cropTop.get() / 100, cropRight.get() / 100, cropBottom.get() / 100);
                         if (ok) {
-                            frame = target;
-                            frameNumber++;
+                            frame = new StreamPlayer.Picture(target, w, h);
                             useA = !useA;
                             status = "";
                         }
@@ -313,48 +252,6 @@ public final class VideoPlayer extends ClientModule {
         videoThread.start();
     }
 
-    private void readVideo(InputStream in, int w, int h) {
-        byte[] a = new byte[w * h * 4], b = new byte[w * h * 4];
-        boolean useA = true;
-        try (DataInputStream data = new DataInputStream(in)) {
-            while (running) {
-                byte[] target = useA ? a : b;
-                data.readFully(target);
-                frame = target;
-                frameNumber++;
-                useA = !useA;
-                status = "";
-            }
-        } catch (IOException e) {
-            if (running && frame == null) status = "Couldn't play that video (check the link / path)";
-        }
-    }
-
-    private void playAudio(InputStream in) {
-        AudioFormat format = new AudioFormat(44100, 16, 2, true, false);
-        try (InputStream audio = in) {
-            SourceDataLine line = AudioSystem.getSourceDataLine(format);
-            line.open(format, 44100);
-            line.start();
-            byte[] buf = new byte[4096];
-            int n;
-            while (running && (n = audio.read(buf)) > 0) {
-                float gain = volume.get() * Minecraft.getInstance().options.getSoundSourceVolume(net.minecraft.sounds.SoundSource.MASTER);
-                for (int i = 0; i + 1 < n; i += 2) { // scale the samples by the volume
-                    int s = (short) ((buf[i] & 255) | (buf[i + 1] << 8));
-                    s = Math.round(s * gain);
-                    buf[i] = (byte) s;
-                    buf[i + 1] = (byte) (s >> 8);
-                }
-                line.write(buf, 0, n - (n % 4));
-            }
-            line.drain();
-            line.close();
-        } catch (Exception e) {
-            LOGGER.debug("Video audio stopped", e);
-        }
-    }
-
     // ---------------------------------------------------------------- drawing
 
     @EventHandler
@@ -366,7 +263,7 @@ public final class VideoPlayer extends ClientModule {
         int boxH = Math.round(boxW * 9 / 16.0F);
         int bx = Math.round((sw - boxW) * x.get() / 100.0F), by = Math.round((sh - boxH) * y.get() / 100.0F);
         handleDrag(mc, sw, sh, bx, by, boxW);
-        byte[] f = frame;
+        StreamPlayer.Picture f = frame;
         if (f == null) {
             if (!status.isEmpty()) {
                 g.fill(bx, by, bx + Math.max(boxW, mc.font.width(status) + 8), by + 14, 0xC0101018);
@@ -374,16 +271,21 @@ public final class VideoPlayer extends ClientModule {
             }
             return;
         }
-        if (frameNumber != uploaded) {
+        if (f != uploaded) {
             upload(f);
-            uploaded = frameNumber;
+            uploaded = f;
         }
+        int alpha = Math.round(opacity.get() * 255);
+        g.fill(bx, by, bx + boxW, by + boxH, alpha << 24); // black bars around videos that aren't 16:9
+        // fit the picture inside the box, keeping its shape
+        float fit = Math.min(boxW / (float) f.width(), boxH / (float) f.height());
+        float dw = f.width() * fit, dh = f.height() * fit;
         var pose = g.pose();
         pose.pushMatrix();
-        pose.translate(bx, by);
-        pose.scale(boxW / (float) frameW, boxH / (float) frameH);
-        int color = (Math.round(opacity.get() * 255) << 24) | 0xFFFFFF;
-        g.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, 0, 0, 0, 0, frameW, frameH, frameW, frameH, color);
+        pose.translate(bx + (boxW - dw) / 2, by + (boxH - dh) / 2);
+        pose.scale(fit, fit);
+        int color = alpha << 24 | 0xFFFFFF;
+        g.blit(RenderPipelines.GUI_TEXTURED, TEXTURE, 0, 0, 0, 0, f.width(), f.height(), f.width(), f.height(), color);
         pose.popMatrix();
         if (mc.screen instanceof ChatScreen) { // show the drag handles while chat is open
             g.fill(bx, by, bx + boxW, by + 1, 0xFF8A5CFF);
@@ -394,7 +296,9 @@ public final class VideoPlayer extends ClientModule {
         }
     }
 
-    private void upload(byte[] rgba) {
+    private void upload(StreamPlayer.Picture picture) {
+        byte[] rgba = picture.rgba();
+        int frameW = picture.width(), frameH = picture.height();
         if (texture == null || texture.getPixels() == null || texture.getPixels().getWidth() != frameW || texture.getPixels().getHeight() != frameH) {
             NativeImage image = new NativeImage(frameW, frameH, false);
             if (texture == null) {
@@ -405,7 +309,7 @@ public final class VideoPlayer extends ClientModule {
             }
         }
         NativeImage pixels = texture.getPixels();
-        // ffmpeg gives RGBA bytes, which is exactly how NativeImage keeps its pixels in memory
+        // FFmpeg gives RGBA bytes, which is exactly how NativeImage keeps its pixels in memory
         MemoryUtil.memByteBuffer(pixels.getPointer(), rgba.length).put(rgba);
         texture.upload();
     }
