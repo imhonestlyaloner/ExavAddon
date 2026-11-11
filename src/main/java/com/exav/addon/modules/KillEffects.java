@@ -7,7 +7,6 @@ import com.exav.addon.holiday.SmoothMesh;
 import com.exav.addon.sky.SkyArt;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.ints.Int2LongOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -70,7 +69,10 @@ public final class KillEffects extends ClientModule {
     private final List<Drop> drops = new ArrayList<>();
     /** who you hit and when */
     private final Int2LongOpenHashMap hitAt = new Int2LongOpenHashMap();
-    private final IntOpenHashSet counted = new IntOpenHashSet();
+    /** when each entity last set off the effect (so one death only counts once, but a respawned player counts again) */
+    private final Int2LongOpenHashMap counted = new Int2LongOpenHashMap();
+    /** where each player was last seen, for kills that only show up in chat (the body may already be gone) */
+    private final java.util.Map<String, Vec3> lastSeen = new java.util.HashMap<>();
     private OggClip clip;
     private int ticks;
     private String clipName = "";
@@ -115,6 +117,68 @@ public final class KillEffects extends ClientModule {
     }
 
     /** from the attack mixin */
+    /** a kill: start the effect, unless this same death already did */
+    private void kill(int entityId, Vec3 at) {
+        long now = System.currentTimeMillis();
+        if (now - counted.getOrDefault(entityId, 0L) < 5000) return;
+        counted.put(entityId, now);
+        start(at);
+    }
+
+    /**
+     * The server tells everyone nearby who caused each bit of damage (also for arrows, tridents, crystals and other
+     * explosions you set off), so anything you hurt in any way is watched for dying, not only what you hit by hand.
+     * Death messages in chat that name you as the killer count too.
+     */
+    @EventHandler
+    public void onPacket(net.anubis.client.event.impl.PacketAppliedEvent event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        if (event.packet instanceof net.minecraft.network.protocol.game.ClientboundDamageEventPacket damage) {
+            int me = mc.player.getId();
+            if (damage.sourceCauseId() == me || damage.sourceDirectId() == me) hitAt.put(damage.entityId(), System.currentTimeMillis());
+        } else if (event.packet instanceof net.minecraft.network.protocol.game.ClientboundSystemChatPacket chat && !chat.overlay()) {
+            deathMessage(mc, chat.content());
+        }
+    }
+
+    /** vanilla death messages: "death.attack.<cause>.player" etc. with the victim first and the killer second */
+    private void deathMessage(Minecraft mc, net.minecraft.network.chat.Component message) {
+        if (!(message.getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents tr)) return;
+        if (!tr.getKey().startsWith("death.") || tr.getArgs().length < 2) return;
+        String me = mc.player.getGameProfile().name();
+        String victim = argText(tr.getArgs()[0]);
+        boolean byMe = false;
+        for (int i = 1; i < tr.getArgs().length; i++) {
+            if (hasName(argText(tr.getArgs()[i]), me)) byMe = true; // display names can carry a rank / team prefix
+        }
+        if (!byMe || hasName(victim, me)) return;
+        Player p = null;
+        for (Player candidate : mc.level.players()) {
+            if (candidate != mc.player && hasName(victim, candidate.getGameProfile().name())) p = candidate;
+        }
+        Vec3 at = p != null ? p.position() : null;
+        int id = p != null ? p.getId() : 0;
+        if (at == null) {
+            for (var e : lastSeen.entrySet()) {
+                if (hasName(victim, e.getKey())) {
+                    at = e.getValue();
+                    id = e.getKey().hashCode();
+                }
+            }
+        }
+        if (at != null) kill(id, at);
+    }
+
+    /** does the text contain this player name as a whole word? */
+    private static boolean hasName(String text, String name) {
+        return !name.isEmpty() && java.util.regex.Pattern.compile("(?<![A-Za-z0-9_])" + java.util.regex.Pattern.quote(name) + "(?![A-Za-z0-9_])").matcher(text).find();
+    }
+
+    private static String argText(Object arg) {
+        return arg instanceof net.minecraft.network.chat.Component c ? c.getString() : String.valueOf(arg);
+    }
+
     public static void attacked(Entity target) {
         KillEffects m = active;
         if (m != null && target != null) m.hitAt.put(target.getId(), System.currentTimeMillis());
@@ -140,12 +204,16 @@ public final class KillEffects extends ClientModule {
             Entity ent = mc.level.getEntity(e.getIntKey());
             if (!(ent instanceof LivingEntity living)) continue;
             if (playersOnly.get() && !(ent instanceof Player)) continue;
-            if ((living.isDeadOrDying() || living.getHealth() <= 0) && counted.add(ent.getId())) {
-                start(living.position());
+            if (living.isDeadOrDying() || living.getHealth() <= 0) {
+                kill(ent.getId(), living.position());
                 it.remove();
             }
         }
-        if (counted.size() > 256) counted.clear();
+        counted.int2LongEntrySet().removeIf(e -> now - e.getLongValue() > 5000);
+        lastSeen.clear();
+        for (Player p : mc.level.players()) {
+            if (p != mc.player && p.isAlive()) lastSeen.put(p.getGameProfile().name(), p.position());
+        }
         drops.removeIf(d -> (System.nanoTime() - d.start) / 1.0E9F > END + 0.5F);
         if (ticks++ % 20 == 0) { // keep the clip decoded and ready, so it starts in sync with the bell
             OggClip c = clip();
