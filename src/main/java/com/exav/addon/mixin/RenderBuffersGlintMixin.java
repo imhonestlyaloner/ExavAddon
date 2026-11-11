@@ -20,7 +20,7 @@ public abstract class RenderBuffersGlintMixin {
             at = @At(value = "INVOKE", ordinal = 0,
                     target = "Lnet/minecraft/client/renderer/MultiBufferSource;immediateWithBuffers(Ljava/util/SequencedMap;Lcom/mojang/blaze3d/vertex/ByteBufferBuilder;)Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;"))
     private SequencedMap<RenderType, ByteBufferBuilder> exav$addGlintBuffers(SequencedMap<RenderType, ByteBufferBuilder> fixed) {
-        for (RenderType type : new RenderType[]{BetterGlint.itemType(), BetterGlint.armorType()}) {
+        for (RenderType type : BetterGlint.allTypes()) {
             fixed.put(type, new ByteBufferBuilder(type.bufferSize()));
         }
         return fixed;

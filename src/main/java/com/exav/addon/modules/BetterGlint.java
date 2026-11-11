@@ -36,7 +36,8 @@ public final class BetterGlint extends ClientModule {
 
     private final StringListSetting items = addSetting("items", new StringListSetting("Items", "minecraft:netherite_sword", "minecraft:diamond_sword").itemPicker());
     private final BooleanSetting allEnchanted = addSetting("all-enchanted", new BooleanSetting("All Enchanted Items", false));
-    private final ModeSetting style = addSetting("style", new ModeSetting("Style", "Flame", GlintTexture.STYLES));
+    private final ModeSetting style = addSetting("style", new ModeSetting("Style", "Galaxy", GlintTexture.STYLES));
+    private final BooleanSetting hands = addSetting("hands", new BooleanSetting("Cover My Arms (first person)", true));
     private final ColorSetting colorA = addSetting("color-a", new ColorSetting("Color 1", 0xFFB04DFF));
     private final ColorSetting colorB = addSetting("color-b", new ColorSetting("Color 2", 0xFF3D4DFF));
     private final BooleanSetting rainbow = addSetting("rainbow", new BooleanSetting("Rainbow", false));
@@ -45,6 +46,7 @@ public final class BetterGlint extends ClientModule {
     private final NumberSetting size = addSetting("size", new NumberSetting("Pattern Size", 1.0F, 0.3F, 3.0F).step(0.05F));
     private final BooleanSetting armor = addSetting("armor", new BooleanSetting("On Worn Armor", true));
     private final BooleanSetting keepVanilla = addSetting("keep-vanilla", new BooleanSetting("Keep Normal Glint Too", false));
+    private final NumberSetting cloudSize = addSetting("galaxy-size", new NumberSetting("Galaxy Size", 1.0F, 0.3F, 3.0F).step(0.05F));
 
     private static RenderType itemType, armorType;
     private DynamicTexture texture;
@@ -56,6 +58,14 @@ public final class BetterGlint extends ClientModule {
         super("Better Glint", "Custom flame / swirl / aurora / sparkle glint in your colours on the items you pick.", ExavAddon.CATEGORY);
         colorA.visibleWhen(() -> !rainbow.get());
         colorB.visibleWhen(() -> !rainbow.get());
+        hands.visibleWhen(this::galaxy);
+        cloudSize.visibleWhen(this::galaxy);
+        size.visibleWhen(() -> !galaxy());
+        keepVanilla.visibleWhen(() -> !galaxy());
+    }
+
+    private boolean galaxy() {
+        return GlintTexture.covers(style.get());
     }
 
     @Override
@@ -118,7 +128,7 @@ public final class BetterGlint extends ClientModule {
 
     public static boolean keepVanilla() {
         BetterGlint m = active;
-        return m != null && m.keepVanilla.get();
+        return m != null && m.keepVanilla.get() && !m.galaxy();
     }
 
     // ---------------------------------------------------------------- render types (like the vanilla glint, our texture)
@@ -133,24 +143,83 @@ public final class BetterGlint extends ClientModule {
         return new Matrix4f().translation(-drift * 0.3F, rise, 0).rotateZ((float) (Math.PI / 24)).scale(scale / size);
     }
 
+    /** the galaxy drifts slowly both ways, like clouds moving through it */
+    private static Matrix4f drift(float scale) {
+        BetterGlint m = active;
+        float speed = m == null ? 1 : m.speed.get();
+        float size = m == null ? 1 : m.cloudSize.get();
+        double ms = net.minecraft.util.Util.getMillis() * speed;
+        float a = (float) (ms % 160000L) / 160000.0F, b = (float) (ms % 230000L) / 230000.0F;
+        return new Matrix4f().translation(a, -b, 0).scale(scale / size);
+    }
+
     private static final TextureTransform ITEM_SCROLL = new TextureTransform("exav_glint", () -> scroll(4.0F));
     private static final TextureTransform ARMOR_SCROLL = new TextureTransform("exav_armor_glint", () -> scroll(0.25F));
+    private static final TextureTransform ITEM_DRIFT = new TextureTransform("exav_galaxy", () -> drift(10.0F));
+    private static final TextureTransform ARMOR_DRIFT = new TextureTransform("exav_armor_galaxy", () -> drift(1.0F));
+    private static final TextureTransform ARM_DRIFT = new TextureTransform("exav_arm_galaxy", () -> drift(2.5F));
+
+    /** the pattern must repeat (the item / skin coordinates go well past one copy of it) */
+    private static com.mojang.blaze3d.textures.GpuSampler repeat() {
+        return com.mojang.blaze3d.systems.RenderSystem.getSamplerCache().getSampler(com.mojang.blaze3d.textures.AddressMode.REPEAT,
+                com.mojang.blaze3d.textures.AddressMode.REPEAT, com.mojang.blaze3d.textures.FilterMode.LINEAR, com.mojang.blaze3d.textures.FilterMode.LINEAR, false);
+    }
+
+    /**
+     * Galaxy: painted over the item / arm (normal see-through blending, not added light like a glint), only where the
+     * item itself was drawn - the same as the vanilla glint shader, just covering instead of shining.
+     */
+    private static final com.mojang.blaze3d.pipeline.RenderPipeline COVER = com.mojang.blaze3d.pipeline.RenderPipeline.builder(
+                    RenderPipelines.MATRICES_PROJECTION_SNIPPET, RenderPipelines.FOG_SNIPPET, RenderPipelines.GLOBALS_SNIPPET)
+            .withLocation(Identifier.fromNamespaceAndPath("exav-addon", "pipeline/galaxy_cover"))
+            .withVertexShader("core/glint").withFragmentShader("core/glint").withSampler("Sampler0")
+            .withDepthWrite(false).withCull(false)
+            .withDepthTestFunction(com.mojang.blaze3d.platform.DepthTestFunction.EQUAL_DEPTH_TEST)
+            .withBlend(com.mojang.blaze3d.pipeline.BlendFunction.TRANSLUCENT)
+            .withVertexFormat(com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_TEX, com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS)
+            .build();
+
+    private static RenderType glintItem, glintArmor, coverItem, coverArmor, coverArm;
+
+    private static RenderType make(String name, com.mojang.blaze3d.pipeline.RenderPipeline pipeline, TextureTransform transform, boolean armor) {
+        RenderSetup.RenderSetupBuilder b = RenderSetup.builder(pipeline).withTexture("Sampler0", TEXTURE, BetterGlint::repeat).setTextureTransform(transform);
+        if (armor) b.setLayeringTransform(LayeringTransform.VIEW_OFFSET_Z_LAYERING);
+        return RenderType.create(name, b.createRenderSetup());
+    }
+
+    /** every render type, so each gets its own buffer drawn after the items (see RenderBuffersGlintMixin) */
+    public static RenderType[] allTypes() {
+        if (glintItem == null) {
+            glintItem = make("exav_glint", RenderPipelines.GLINT, ITEM_SCROLL, false);
+            glintArmor = make("exav_armor_glint", RenderPipelines.GLINT, ARMOR_SCROLL, true);
+            coverItem = make("exav_galaxy", COVER, ITEM_DRIFT, false);
+            coverArmor = make("exav_armor_galaxy", COVER, ARMOR_DRIFT, true);
+            coverArm = make("exav_arm_galaxy", COVER, ARM_DRIFT, false);
+        }
+        return new RenderType[]{glintItem, glintArmor, coverItem, coverArmor, coverArm};
+    }
+
+    private static boolean covering() {
+        BetterGlint m = active;
+        return m != null && m.galaxy();
+    }
 
     public static RenderType itemType() {
-        if (itemType == null) {
-            itemType = RenderType.create("exav_glint", RenderSetup.builder(RenderPipelines.GLINT)
-                    .withTexture("Sampler0", TEXTURE).setTextureTransform(ITEM_SCROLL).createRenderSetup());
-        }
-        return itemType;
+        allTypes();
+        return covering() ? coverItem : glintItem;
     }
 
     public static RenderType armorType() {
-        if (armorType == null) {
-            armorType = RenderType.create("exav_armor_glint", RenderSetup.builder(RenderPipelines.GLINT)
-                    .withTexture("Sampler0", TEXTURE).setTextureTransform(ARMOR_SCROLL)
-                    .setLayeringTransform(LayeringTransform.VIEW_OFFSET_Z_LAYERING).createRenderSetup());
-        }
-        return armorType;
+        allTypes();
+        return covering() ? coverArmor : glintArmor;
+    }
+
+    /** the galaxy for your first-person arms, or null when that's off */
+    public static RenderType armType() {
+        BetterGlint m = active;
+        if (m == null || !m.galaxy() || !m.hands.get() || m.texture == null) return null;
+        allTypes();
+        return coverArm;
     }
 
     // ---------------------------------------------------------------- set while an item's layers are being submitted

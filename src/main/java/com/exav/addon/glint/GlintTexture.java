@@ -8,11 +8,17 @@ public final class GlintTexture {
     private GlintTexture() {
     }
 
-    public static final String[] STYLES = {"Flame", "Swirl", "Aurora", "Sparkle"};
+    public static final String[] STYLES = {"Galaxy", "Flame", "Swirl", "Aurora", "Sparkle"};
+
+    /** Galaxy is painted over the item (covers it); the others are a glint added on top */
+    public static boolean covers(String style) {
+        return "Galaxy".equals(style);
+    }
     public static final int SIZE = 128;
 
     /** ABGR pixels (NativeImage order) */
     public static int[] make(String style, int colorA, int colorB, boolean rainbow, float hueShift, float intensity) {
+        if (covers(style)) return galaxy(colorA, colorB, rainbow, hueShift, intensity);
         int[] out = new int[SIZE * SIZE];
         for (int y = 0; y < SIZE; y++) {
             for (int x = 0; x < SIZE; x++) {
@@ -76,6 +82,51 @@ public final class GlintTexture {
             }
         }
         return out;
+    }
+
+    /**
+     * Opaque galaxy: a deep blue base (Color 2) with swirling violet / pink nebula clouds (Color 1) and a scatter of
+     * small stars. Intensity makes the clouds brighter and bigger.
+     */
+    private static int[] galaxy(int nebula, int base, boolean rainbow, float hueShift, float intensity) {
+        if (rainbow) {
+            nebula = java.awt.Color.HSBtoRGB((hueShift + 0.12F) % 1.0F, 0.7F, 1.0F) & 0xFFFFFF;
+            base = java.awt.Color.HSBtoRGB(hueShift % 1.0F, 0.8F, 1.0F) & 0xFFFFFF;
+        }
+        int deep = scale(base, 0.38F), pink = lerp(nebula, 0xFFC4F4, 0.45F);
+        float[] glow = new float[SIZE * SIZE];
+        for (int i = 0; i < 70; i++) { // stars, a few with a soft halo
+            float sx = hash(i, 21), sy = hash(i, 22), b = 0.35F + 0.65F * hash(i, 23), r = hash(i, 24) < 0.15F ? 2.6F : 1.1F;
+            for (int dy = -4; dy <= 4; dy++) {
+                for (int dx = -4; dx <= 4; dx++) {
+                    float d = (float) Math.sqrt(dx * dx + dy * dy);
+                    float a = b * Math.max(0, 1 - d / r);
+                    int px = Math.floorMod((int) (sx * SIZE) + dx, SIZE), py = Math.floorMod((int) (sy * SIZE) + dy, SIZE);
+                    glow[py * SIZE + px] = Math.max(glow[py * SIZE + px], a);
+                }
+            }
+        }
+        int[] out = new int[SIZE * SIZE];
+        for (int y = 0; y < SIZE; y++) {
+            for (int x = 0; x < SIZE; x++) {
+                float u = x / (float) SIZE, v = y / (float) SIZE;
+                // warped fractal noise = smoky, swirling clouds (warping by tiling noise keeps it seamless)
+                float wx = fbm(u, v, 4, 61), wy = fbm(u, v, 4, 67);
+                float body = fbm(u + 0.45F * wx, v + 0.45F * wy, 5, 71);
+                float wisps = fbm(u * 2 + 0.8F * wy, v * 2 + 0.8F * wx, 4, 79);
+                int c = lerp(deep, base, smooth(0.25F, 0.7F, body));                    // blue body, darker in the folds
+                float cloud = smooth(0.62F - 0.1F * intensity, 0.9F, body * 0.55F + wisps * 0.6F);
+                c = lerp(c, nebula, cloud * 0.9F);                                        // violet clouds
+                c = lerp(c, pink, smooth(0.78F, 1.0F, wisps * 0.7F + body * 0.45F) * Math.min(1, intensity)); // pink cores
+                c = lerp(c, 0xFFFFFF, Math.min(1, glow[y * SIZE + x]) * 0.9F);            // stars
+                out[y * SIZE + x] = 0xFF000000 | (c & 255) << 16 | (c & 0xFF00) | (c >> 16) & 255;
+            }
+        }
+        return out;
+    }
+
+    private static int scale(int rgb, float k) {
+        return (int) (((rgb >> 16) & 255) * k) << 16 | (int) (((rgb >> 8) & 255) * k) << 8 | (int) ((rgb & 255) * k);
     }
 
     private static float wrap(float d) {

@@ -38,8 +38,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Kill effects. "Yeat Bell": when you kill someone, a giant golden bell flies in and stops 7 blocks above where they
- * died, rings when the bell sound in the "Get Busy" clip hits, then drops and lands with green fog rolling out from under it.
+ * Kill effects. "Yeat Bell": when you kill someone, a giant golden bell flies in and stops just above where they died,
+ * rings (and swings round in a circle) when the bell sound in the "Get Busy" clip hits, then drops and lands with green fog rolling out from under it.
  * The clip is read from .minecraft/config/exav-addon/kill_effect.ogg (not shipped with the addon).
  */
 public final class KillEffects extends ClientModule {
@@ -53,13 +53,14 @@ public final class KillEffects extends ClientModule {
      */
     static final float[] HITS = {4.08F};
     /** flies in and stops 7 blocks above where they died, hangs still until the bell sound, then drops */
-    static final float FLY_IN = 1.3F, DROP_AT = 4.32F, LAND = 4.72F, SINK_AT = 7.4F, END = 8.4F, HANG_HEIGHT = 7.0F;
+    static final float FLY_IN = 1.3F, DROP_AT = 4.32F, LAND = 4.72F, SINK_AT = 7.4F, END = 8.4F;
     /** how far off (sideways and up) the bell starts its flight */
     static final float FLY_DISTANCE = 34.0F, FLY_RISE = 22.0F;
 
     private final ModeSetting effect = addSetting("effect", new ModeSetting("Effect", "Yeat Bell", "Yeat Bell"));
     private final BooleanSetting playersOnly = addSetting("players-only", new BooleanSetting("Players Only", true));
     private final NumberSetting bellSize = addSetting("bell-size", new NumberSetting("Bell Size", 4.5F, 2.0F, 10.0F).step(0.5F));
+    private final NumberSetting hangHeight = addSetting("hang-height", new NumberSetting("Hang Height (blocks above them)", 2.5F, 0.0F, 15.0F).step(0.5F));
     private final NumberSetting volume = addSetting("volume", new NumberSetting("Volume", 0.8F, 0.0F, 1.0F).step(0.05F));
     private final NumberSetting sync = addSetting("sync", new NumberSetting("Sync Offset (ms)", 0.0F, -400.0F, 400.0F).step(10.0F));
     private final BooleanSetting greenFog = addSetting("green-fog", new BooleanSetting("Green Fog", true));
@@ -256,7 +257,7 @@ public final class KillEffects extends ClientModule {
         int floor = p.getY();
         for (int i = 0; i < 6 && mc.level.getBlockState(p.below()).isAir(); i++) p = p.below();
         floor = p.getY();
-        drops.add(new Drop(new Vec3(at.x, floor, at.z), (float) (at.y - floor) + HANG_HEIGHT, System.nanoTime(), drops.size() * 31 + (int) (System.nanoTime() & 1023)));
+        drops.add(new Drop(new Vec3(at.x, floor, at.z), (float) (at.y - floor) + hangHeight.get(), System.nanoTime(), drops.size() * 31 + (int) (System.nanoTime() & 1023)));
         OggClip c = clip();
         if (c != null) {
             c.play(volume.get()); // the game's Master volume is applied on top
@@ -319,7 +320,7 @@ public final class KillEffects extends ClientModule {
         }
         // the clapper only moves for the bell sound: it swings out and hits the side exactly on the sound, then
         // bounces off and settles; the bell rocks and flashes from the hit
-        float swing = tilt, clap = 0, glint = 0;
+        float swing = tilt, clap = 0, glint = 0, circle = 0, circleAngle = 0;
         final float windUp = 0.14F, wall = 0.42F;
         for (int i = 0; i < HITS.length; i++) {
             float since = t - HITS[i];
@@ -331,7 +332,11 @@ public final class KillEffects extends ClientModule {
                 continue;
             }
             clap += sign * wall * (float) Math.exp(-since * 4.5F) * (float) Math.cos(since * 13);
-            swing += -sign * 0.2F * (float) Math.exp(-since * 2.2F) * (float) Math.sin(since * 7);
+            // the hit sends the bell swinging round in a circle (it leans over and the lean sweeps around), slowly
+            // dying down - and it settles fast once it lands
+            float fade = (float) Math.exp(-since * 0.55F) * (t > LAND ? (float) Math.exp(-(t - LAND) * 5) : 1);
+            circle = Math.max(circle, 0.42F * fade * Math.min(1, since * 6));
+            circleAngle = (float) (sign * since * Math.PI * 2 * 1.15) + d.seed;
             glint = Math.max(glint, (float) Math.exp(-since * 6));
         }
         if (t >= LAND) glint = Math.max(glint, 0.6F * (float) Math.exp(-(t - LAND) * 6)); // flash on landing (no clapper)
@@ -344,6 +349,7 @@ public final class KillEffects extends ClientModule {
         // the bell (hangs from its top, so put the top at bottom + height)
         pose.pushPose();
         pose.translate(x, y + lift + h, z);
+        if (circle > 0.001F) pose.mulPose(new Quaternionf().rotationAxis(circle, (float) Math.cos(circleAngle), 0, (float) Math.sin(circleAngle)));
         pose.mulPose(new Quaternionf().rotationY(yaw).rotateX(swing));
         pose.scale(scale, scale, scale);
         int gold = 0xFFD9A93C;

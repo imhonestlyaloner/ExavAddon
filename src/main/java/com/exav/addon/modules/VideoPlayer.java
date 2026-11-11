@@ -41,13 +41,13 @@ public final class VideoPlayer extends ClientModule {
     private static final Logger LOGGER = LoggerFactory.getLogger("Exav Addon");
     private static final Identifier TEXTURE = Identifier.fromNamespaceAndPath("exav-addon", "dynamic/video_player");
 
-    private final ModeSetting mode = addSetting("mode", new ModeSetting("Source", "Window Capture", "Window Capture", "File / Link"));
+    private final ModeSetting mode = addSetting("mode", new ModeSetting("Source", "YouTube / Video", "YouTube / Video", "Window Capture"));
     private final StringSetting windowTitle = addSetting("window", new StringSetting("Window Title Contains", "YouTube"));
     private final NumberSetting cropTop = addSetting("crop-top", new NumberSetting("Crop Top (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
     private final NumberSetting cropBottom = addSetting("crop-bottom", new NumberSetting("Crop Bottom (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
     private final NumberSetting cropLeft = addSetting("crop-left", new NumberSetting("Crop Left (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
     private final NumberSetting cropRight = addSetting("crop-right", new NumberSetting("Crop Right (%)", 0.0F, 0.0F, 45.0F).step(0.5F));
-    private final StringSetting source = addSetting("source", new StringSetting("Video (file path or link)", ""));
+    private final StringSetting source = addSetting("source", new StringSetting("YouTube Link, Video Link or File", ""));
     private final ModeSetting resolution = addSetting("resolution", new ModeSetting("Resolution", "360p", "144p", "240p", "360p", "480p", "720p", "1080p"));
     private final ModeSetting fps = addSetting("fps", new ModeSetting("Frame Rate", "30", "15", "24", "30", "60"));
     private final NumberSetting x = addSetting("x", new NumberSetting("X (%)", 2.0F, 0.0F, 100.0F).step(0.5F));
@@ -58,6 +58,7 @@ public final class VideoPlayer extends ClientModule {
     private final BooleanSetting loop = addSetting("loop", new BooleanSetting("Loop", true));
     private final BooleanSetting playOnEnable = addSetting("autoplay", new BooleanSetting("Play When Enabled", true));
     private final StringSetting ffmpegPath = addSetting("ffmpeg", new StringSetting("FFmpeg Path", "ffmpeg"));
+    private final StringSetting ytdlpPath = addSetting("yt-dlp", new StringSetting("yt-dlp Path", "yt-dlp"));
     private final ActionSetting play = addSetting("play", new ActionSetting("Play / Restart", this::start));
     private final ActionSetting stopAction = addSetting("stop", new ActionSetting("Stop", this::stop));
 
@@ -76,7 +77,7 @@ public final class VideoPlayer extends ClientModule {
     private float startX, startY, startW;
 
     public VideoPlayer() {
-        super("Video Player", "Shows a window (like YouTube in your browser) or plays a video file / direct link as a movable, resizable overlay.", ExavAddon.CATEGORY);
+        super("Video Player", "Plays a YouTube video, video link or file as a movable, resizable overlay (needs ffmpeg, and yt-dlp for YouTube).", ExavAddon.CATEGORY);
         windowTitle.visibleWhen(this::capturing);
         cropTop.visibleWhen(this::capturing);
         cropBottom.visibleWhen(this::capturing);
@@ -86,6 +87,7 @@ public final class VideoPlayer extends ClientModule {
         volume.visibleWhen(() -> !capturing());
         loop.visibleWhen(() -> !capturing());
         ffmpegPath.visibleWhen(() -> !capturing());
+        ytdlpPath.visibleWhen(() -> !capturing());
     }
 
     private boolean capturing() {
@@ -116,51 +118,107 @@ public final class VideoPlayer extends ClientModule {
         }
         String src = source.get().trim();
         if (src.isEmpty()) {
-            status = "Set a video file path or link in the settings";
-            return;
-        }
-        String lower = src.toLowerCase(Locale.ROOT);
-        if (lower.contains("youtube.com") || lower.contains("youtu.be")) {
-            status = "For YouTube: play it in your browser and set Source to Window Capture";
+            status = "Paste a YouTube link (or a video link / file path) into the settings";
             return;
         }
         frameH = frameHeight();
         frameW = Math.round(frameH * 16 / 9.0F / 2) * 2;
-        int rate = Integer.parseInt(fps.get());
         running = true;
-        status = "Loading...";
-        List<String> base = new ArrayList<>(List.of(ffmpegPath.get().trim(), "-hide_banner", "-loglevel", "error", "-re"));
-        if (loop.get()) base.addAll(List.of("-stream_loop", "-1"));
-        base.addAll(List.of("-i", src));
-        // picture: scaled to the chosen resolution (letterboxed), raw RGBA frames
-        List<String> video = new ArrayList<>(base);
-        video.addAll(List.of("-an", "-vf",
-                "scale=" + frameW + ":" + frameH + ":force_original_aspect_ratio=decrease,pad=" + frameW + ":" + frameH + ":(ow-iw)/2:(oh-ih)/2,fps=" + rate,
-                "-f", "rawvideo", "-pix_fmt", "rgba", "-"));
-        // sound: 16-bit stereo PCM
-        List<String> audio = new ArrayList<>(base);
-        audio.addAll(List.of("-vn", "-f", "s16le", "-ac", "2", "-ar", "44100", "-"));
+        int session = ++playSession;
+        if (needsYtDlp(src)) {
+            status = "Getting the video from YouTube...";
+            Thread resolve = new Thread(() -> {
+                List<String> urls = resolveWithYtDlp(src, frameH);
+                synchronized (this) {
+                    if (!running || session != playSession) return;
+                    if (urls != null) launch(urls, true);
+                }
+            }, "Exav yt-dlp");
+            resolve.setDaemon(true);
+            resolve.start();
+        } else {
+            status = "Loading...";
+            launch(List.of(src), src.startsWith("http"));
+        }
+    }
+
+    private volatile int playSession;
+
+    /** web pages (YouTube and other sites) need yt-dlp to find the actual video; files and direct video links don't */
+    private static boolean needsYtDlp(String src) {
+        String lower = src.toLowerCase(Locale.ROOT);
+        if (!lower.startsWith("http")) return false;
+        String path = lower.replaceAll("[?#].*$", "");
+        return !(path.endsWith(".mp4") || path.endsWith(".webm") || path.endsWith(".mkv") || path.endsWith(".mov")
+                || path.endsWith(".m3u8") || path.endsWith(".avi") || path.endsWith(".flv") || path.endsWith(".ts"));
+    }
+
+    /** asks yt-dlp for the stream address(es): one with picture + sound, or a picture one and a sound one */
+    private List<String> resolveWithYtDlp(String url, int height) {
+        String format = "bv*[height<=" + height + "][vcodec!^=av01]+ba/b[height<=" + height + "]/b";
         try {
-            Process v = new ProcessBuilder(video).redirectError(ProcessBuilder.Redirect.DISCARD).start();
-            processes.add(v);
+            Process p = new ProcessBuilder(ytdlpPath.get().trim(), "--no-playlist", "--no-warnings", "-f", format, "-g", url).start();
+            synchronized (this) {
+                processes.add(p);
+            }
+            String out = new String(p.getInputStream().readAllBytes()).trim();
+            String err = new String(p.getErrorStream().readAllBytes()).trim();
+            p.waitFor();
+            List<String> urls = new ArrayList<>();
+            for (String line : out.split("\\R")) if (line.startsWith("http")) urls.add(line.trim());
+            if (urls.isEmpty()) {
+                String last = err.isEmpty() ? "no video found" : err.substring(err.lastIndexOf('\n') + 1);
+                if (running) status = "yt-dlp: " + (last.length() > 120 ? last.substring(0, 120) + "..." : last);
+                LOGGER.warn("yt-dlp couldn't get {}: {}", url, err);
+                return null;
+            }
+            return urls;
+        } catch (IOException e) {
+            if (running) status = "Couldn't start yt-dlp - install it (winget install yt-dlp.yt-dlp) or set yt-dlp Path";
+            return null;
+        } catch (InterruptedException e) {
+            return null;
+        }
+    }
+
+    /**
+     * One ffmpeg plays everything: picture as raw RGBA frames on its normal output, sound as 16-bit PCM on its
+     * second output (so both come from the same clock and stay in sync).
+     */
+    private synchronized void launch(List<String> inputs, boolean network) {
+        int rate = Integer.parseInt(fps.get());
+        status = "Loading...";
+        List<String> cmd = new ArrayList<>(List.of(ffmpegPath.get().trim(), "-nostdin", "-hide_banner", "-nostats", "-loglevel", "quiet"));
+        for (String in : inputs) {
+            if (network) cmd.addAll(List.of("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"));
+            if (loop.get()) cmd.addAll(List.of("-stream_loop", "-1"));
+            cmd.addAll(List.of("-re", "-i", in));
+        }
+        int audioInput = inputs.size() > 1 ? 1 : 0;
+        cmd.addAll(List.of("-map", "0:v:0", "-vf",
+                "scale=" + frameW + ":" + frameH + ":force_original_aspect_ratio=decrease,pad=" + frameW + ":" + frameH + ":(ow-iw)/2:(oh-ih)/2,fps=" + rate,
+                "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"));
+        cmd.addAll(List.of("-map", audioInput + ":a:0?", "-f", "s16le", "-ac", "2", "-ar", "44100", "pipe:2"));
+        try {
+            Process p = new ProcessBuilder(cmd).start();
+            processes.add(p);
             int w = frameW, h = frameH;
-            videoThread = new Thread(() -> readVideo(v.getInputStream(), w, h), "Exav video");
+            videoThread = new Thread(() -> readVideo(p.getInputStream(), w, h), "Exav video");
             videoThread.setDaemon(true);
             videoThread.start();
-            Process a = new ProcessBuilder(audio).redirectError(ProcessBuilder.Redirect.DISCARD).start();
-            processes.add(a);
-            audioThread = new Thread(() -> playAudio(a.getInputStream()), "Exav video audio");
+            audioThread = new Thread(() -> playAudio(p.getErrorStream()), "Exav video audio");
             audioThread.setDaemon(true);
             audioThread.start();
         } catch (IOException e) {
             running = false;
-            status = "Couldn't start ffmpeg - install it, or set FFmpeg Path to ffmpeg.exe";
+            status = "Couldn't start ffmpeg - install it (winget install Gyan.FFmpeg) or set FFmpeg Path";
             LOGGER.warn("Couldn't start ffmpeg", e);
         }
     }
 
     private synchronized void stop() {
         running = false;
+        playSession++;
         for (Process p : processes) p.destroyForcibly();
         processes.clear();
         frame = null;
@@ -236,7 +294,7 @@ public final class VideoPlayer extends ClientModule {
                 status = "";
             }
         } catch (IOException e) {
-            if (running && frame == null) status = "Couldn't play that video (check the path / link)";
+            if (running && frame == null) status = "Couldn't play that video (check the link / path)";
         }
     }
 
